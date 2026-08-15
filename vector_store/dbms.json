@@ -1,0 +1,80 @@
+[
+  {
+    "text": "DBMS 4th Sem ( PYQ + MP + Imp topics)  Module 1  1. Attributes and its types  2. Logical vs physical data independence.  3. Three schema architecture  4. Database and DBMS advantages.  5. Categories of data models.  6. Component modules of DBMS with diagram.  7. ER diagram      1. Attributes and its types  • An entity is represented by a set of attributes, that is  descriptive properties possessed by all members of an entity  set.",
+    "subject": "dbms",
+    "page": 1,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "A. Simple Attribute  Simple attributes are those that are atomic (Not  Divisible).  Example: Roll_no, Class and Age.    B. Composite Attributes  Composite attributes are those that can be further subdivided into simpler  parts. Here, the attributes “Name” and “Address” are composite attributes  as they are composed of many other simple attributes.    C. Single Valued Attribute  Single valued attributes are those attributes which can take only one value  for a given entity from an entity set.  Here, all the attributes are single valued attributes as they can take only  one specific value for each entity.",
+    "subject": "dbms",
+    "page": 2,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "D. Multi-Valued Attributes  Multi valued attributes are those attributes which can take more than one  value for a given entity from an entity set.  Here, the attributes “Mob_no” and “Email_id” are multi valued attributes  as they can take more than one values for a given entity.      E. Derived Attributes  Derived attributes are those attributes which can be derived from other  attribute(s).  Here, the attribute “Age” is a derived attribute as it can be derived from the  attribute “DOB”.",
+    "subject": "dbms",
+    "page": 3,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "F. Key Attributes  Key attributes are those attributes which can identify an entity uniquely in  an entity set.  Here, the attribute “Roll_no” is a key attribute as it can identify any  student uniquely.    2. Logical vs Physical data Independence    3. Three schema Architecture  Proposed to support DBMS characteristics of:  a. Program-data independence.  b. Support of multiple views of the data.  Not explicitly used in commercial DBMS products, but has been useful in  explaining database system organization",
+    "subject": "dbms",
+    "page": 4,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "• Defines DBMS schemas at three levels:  a. Internal schema at the internal level to describe physical storage  structures and access paths (e.g indexes).  • Typically uses a physical data model.  b. Conceptual schema at the conceptual level to describe the  structure and constraints for the whole database for a  community of users.  • Uses a conceptual or an implementation data model.  c. External schemas at the external level to describe the various  user views.  • Usually uses the same data model as the conceptual  schema.    4. Advantages Of DBMS Approach  1.  •  Data Redundancy Control  DBMS reduces duplication of data by storing it in a centralized  database.  2.  •  Data Consistency  Since redundancy is controlled, the same data remains consistent  across the system.",
+    "subject": "dbms",
+    "page": 5,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "3.  •  Data Sharing  Multiple users and applications can access and share the same  database simultaneously.  4.  •  Data Security  DBMS provides authorization and access control to protect sensitive  data.  5.  •  Data Integrity  It ensures accuracy and reliability of data through constraints and  rules.  6.  •  Backup and Recovery  DBMS provides mechanisms to recover data in case of system failure  or data loss.  5. Categories of Data Modules   A set of concepts to describe the structure of a database, the operations for  manipulating these structures, and certain constraints that the database should  obey.  • Categories  • Conceptual (high-level, semantic) data models:  • Provide concepts that are close to the way many users  perceive data.  • (Also called entity-based or object-based data  models.)  • Physical (low-level, internal) data models:  • Provide concepts that describe detai",
+    "subject": "dbms",
+    "page": 6,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "ta.  • (Also called entity-based or object-based data  models.)  • Physical (low-level, internal) data models:  • Provide concepts that describe details of how data is stored  in the computer. These are usually specified in an ad-hoc  manner through DBMS design and administration manuals  • Implementation (representational) data models:  • Provide concepts that fall between the above two, used by  many commercial DBMS implementations (e.g. relational  data models used in many commercial systems).  • Self-Describing Data Models:  • Combine the description of data with the data values.  Examples include XML, key-value stores and some NOSQL  systems.",
+    "subject": "dbms",
+    "page": 6,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "6. Component Modules Of DBMS    • The top part of the figure refers to the various users of the database  environment and their interfaces.   • The lower part shows the internal modules of the DBMS responsible  for storage of data and processing of transactions.  • The database and the DBMS catalog are usually stored on disk.  •  Access to the disk is controlled primarily by the operating system (OS),  which schedules disk read/write.  • Buffer management module - schedule disk read/write.  • A higher-level stored data manager module of the DBMS controls  access to DBMS information that is stored on disk, whether it is part of  the database or the catalog.  • The DBA staff works on defining the database and tuning it by making  changes to its definition using the DDL and other privileged commands.  • Casual users and persons with occasional need for information from  the database interac",
+    "subject": "dbms",
+    "page": 7,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "ts definition using the DDL and other privileged commands.  • Casual users and persons with occasional need for information from  the database interact using the interactive query interface.",
+    "subject": "dbms",
+    "page": 7,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "• Application programmers who create programs using some host  programming languages  • Parametric users who do data entry work by supplying parameters to  predefined transactions.  • The DDL compiler processes schema definitions, specified in the DDL,  and stores descriptions of the schemas (meta-data) in the DBMS  catalog.   • The catalog includes information such as the names and sizes of files,  names and data types of data items, storage details of each file,  mapping information among schemas, and constraints.  • Query compiler – compiles queries into an internal form.  • Query optimizer - concerned with the rearrangement and possible  reordering of operations, elimination of redundancies, and use of  efficient search algorithms during execution.  • Precompiler - extracts DML commands from an application program  written in a host programming language  • Runtime database processor",
+    "subject": "dbms",
+    "page": 8,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "g execution.  • Precompiler - extracts DML commands from an application program  written in a host programming language  • Runtime database processor executes   (1) the privileged commands  (2) the executable query plans  (3) the canned transactions with runtime parameters.  • Concurrency control and backup and recovery systems are integrated  into the working of the runtime database processor for purposes of  transaction management.      The  relationship  can be described by certain  characteristics.",
+    "subject": "dbms",
+    "page": 8,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "• Degree of the relationship.  • Role.  • Recursive Relationship.  • Cardinality.  • Participation Constraint.  • Degree of The Relationship  The  total number of entities participating in the relation is called  degree of the Relationship.  1.Unary Relationship.  2. Binary Relationship.  3. Ternary Relationship.  • Unary Relationship  When there is a relationship between two entities of the same type, it  is known as a unary or recursive relationship. This means that the  relationship is between different instances of the same entity type.   When both participants in the relationship are the same entity.  Ex: Subjects may be prerequisites for other subjects    • Binary Relationship  When there is a relationship between two different entities, it is known  as a binary relationship.      • Ternary Relationship",
+    "subject": "dbms",
+    "page": 9,
+    "source": "DBMS 4th Sem m1.pdf"
+  },
+  {
+    "text": "When there is a relationship between three different entities, it is  known as a ternary relationship. An example of a ternary relationship  can be shown as follows     • Role  • Role is the function an entity plays in the relationship.  • Roles are optional.  • They help in clarifying the semantics of a relationship.  • EMPLOYEE  entity is playing the role of worker.    • Recursive Relationship  • When the relationship occurs within the same entity.it is called  Recursive Relationship.  • An entity related to itself is the recursive relationship.  • The same entity performs different roles.  • EMPLOYEE  entity is playing the role of worker.  • EMPLOYEE  entity is playing the role of manager.",
+    "subject": "dbms",
+    "page": 10,
+    "source": "DBMS 4th Sem m1.pdf"
+  }
+]
