@@ -1,3 +1,4 @@
+# Python virtual environments
 .venv/
 venv/
 ENV/
@@ -8,58 +9,23 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
-*.so
-
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-*.egg
-pip-wheel-metadata/
-.eggs/
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
 # Unit test / coverage reports
 .pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
 
-# Jupyter Notebook
+# Jupyter / Editor / OS files
 .ipynb_checkpoints/
-
-# VS Code
 .vscode/
-
-# Environment variables
-.env
-
-# macOS
-.DS_Store
-
-# Logs
-*.log
-
-# Local database
-data/database.db
-
-# virtualenv artifacts and Python cache
-*.pyc
-*.pyo
-*.pyd
-
-# Editor directories and files
 .idea/
-*.sublime-project
-*.sublime-workspace
-
-# Ignore compiled wheel files
+.DS_Store
+*.log
 *.whl
 
-# Ignore Node modules
-node_modules/
-
+# Local database & transient user data
+data/database.db
+data/notes/user_*
+vector_store/user_*
+vector_store/*.index
+vector_store/*.json

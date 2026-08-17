@@ -2,8 +2,8 @@ streamlit
 ollama
 pymupdf
 faiss-cpu
-sentence-transformers
 numpy
 pandas
 scikit-learn
-plotly 
+plotly
+reportlab
