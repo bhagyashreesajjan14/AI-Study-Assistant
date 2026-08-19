@@ -6,6 +6,8 @@ from datetime import datetime
 from config import (
     NOTES_DIR,
     VECTOR_DIR,
+    SUPPORTED_FILE_EXTENSIONS,
+    MAX_UPLOAD_SIZE_MB,
     get_user_notes_dir,
     get_user_vector_dir
 )
@@ -30,17 +32,36 @@ from database import (
     get_user_document_jobs,
     get_user_documents,
     get_user_completed_documents,
+    get_document_by_id,
+    get_latest_user_document,
     check_duplicate_document,
     save_study_plan,
     get_latest_study_plan,
-    get_user_study_plans
+    get_user_study_plans,
+    create_note,
+    update_note,
+    delete_note,
+    get_user_notes,
+    get_note_by_id,
+    create_quiz_job,
+    update_quiz_job_status,
+    get_user_quiz_jobs,
+    get_quiz_job_by_id,
+    get_latest_quiz_job,
+    delete_quiz_job
 )
 
 from ai import (
     ask_ai,
     ask_ai_chat,
+    ask_ai_chat_stream,
     generate_quiz,
-    explain_mistake
+    generate_quiz_from_material,
+    generate_summary,
+    generate_flashcards,
+    generate_notes_explanation,
+    explain_mistake,
+    start_background_quiz_generation
 )
 
 from rag import (
@@ -51,7 +72,8 @@ from rag import (
     save_index,
     load_index,
     start_background_indexing,
-    load_user_subject_index
+    load_user_subject_index,
+    get_full_document_text
 )
 
 from quiz import (
@@ -75,6 +97,12 @@ from study_planner import (
     generate_study_plan,
     generate_study_plan_pdf,
     format_duration
+)
+
+from pdf_generator import (
+    generate_response_pdf,
+    generate_chat_pdf,
+    derive_pdf_filename
 )
 
 from utils import (
@@ -110,11 +138,20 @@ defaults = {
     "quiz_subject": "",
     "quiz_topic": "",
     "quiz_difficulty": "Intermediate",
+    "active_quiz_job_id": None,
     "active_chat_id": None,
     "pending_prompt": None,
     "current_study_plan": None,
     "current_plan_pdf": None,
-    "study_material_qa_history": []
+    "study_material_qa_history": [],
+    "active_document_id": None,
+    "active_doc_summary": None,
+    "active_doc_flashcards": None,
+    "active_doc_notes": None,
+    "active_card_idx": 0,
+    "show_card_back": False,
+    "active_note_id": None,
+    "note_search_query": ""
 }
 
 for key, value in defaults.items():
@@ -363,10 +400,59 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     margin-top: 0.75rem;
 }
 
-/* Sidebar styling */
-section[data-testid="stSidebar"] {
-    background-color: #f8fafc;
-    border-right: 1px solid #e2e8f0;
+/* Flashcard Styles */
+.flashcard-box {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 1.75rem;
+    margin: 1rem 0;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    text-align: center;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.flashcard-front {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1.5;
+}
+
+.flashcard-back {
+    font-size: 1.05rem;
+    color: #334155;
+    line-height: 1.6;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px dashed #cbd5e1;
+}
+
+.flashcard-tag {
+    display: inline-block;
+    background: #e0e7ff;
+    color: #4338ca;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-bottom: 0.8rem;
+}
+
+.doc-info-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.25rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #6366f1;
+    border-radius: 10px;
+    margin-bottom: 1.2rem;
 }
 
 /* Dark mode */
@@ -465,16 +551,27 @@ if not st.session_state.authenticated:
 
 current_user = st.session_state.user or {}
 user_id = current_user.get("id", 1)
-user_display = current_user.get("name", "Student")
+
+# Retrieve profile to guarantee the exact registered name is used consistently
+profile_record = get_profile(user_id=user_id)
+if profile_record and profile_record[0]:
+    user_display = profile_record[0]
+    user_course = profile_record[1] if profile_record[1] else current_user.get("course", "")
+    user_semester = profile_record[2] if profile_record[2] else current_user.get("semester", 1)
+else:
+    user_display = current_user.get("name", "Student")
+    user_course = current_user.get("course", "")
+    user_semester = current_user.get("semester", 1)
 
 # Top Brand Bar
+badge_text = f"{user_display} &bull; {user_course}" if user_course else user_display
 st.markdown(f"""
 <div class="app-brand-bar">
     <div>
         <h1 class="app-brand-title">AI Study Assistant</h1>
     </div>
     <div>
-        <span class="app-brand-badge">{user_display} &bull; {current_user.get('course', 'Student')}</span>
+        <span class="app-brand-badge">{badge_text}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -580,8 +677,8 @@ if page == "AI Tutor":
     if active_chat_id is not None:
         messages = get_chat_messages(active_chat_id, user_id=user_id)
 
-        # Controls Row
-        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([0.30, 0.35, 0.35])
+        # Controls Row & Full Chat Export
+        ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([0.25, 0.25, 0.25, 0.25])
         with ctrl_col1:
             mode = st.selectbox(
                 "Tutor Mode",
@@ -609,6 +706,29 @@ if page == "AI Tutor":
                 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                 active_subject_name = format_subject(chat_subject) if chat_subject != 'General' else 'General Knowledge'
                 st.caption(f"Context: **{active_subject_name}**")
+
+        with ctrl_col4:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if messages:
+                try:
+                    active_chat_obj = next((c for c in chats if c["id"] == active_chat_id), None)
+                    chat_title_str = active_chat_obj["title"] if active_chat_obj else "AI Tutor Chat"
+                    full_chat_pdf = generate_chat_pdf(
+                        session_title=chat_title_str,
+                        subject=chat_subject,
+                        student_name=user_display,
+                        messages=messages
+                    )
+                    st.download_button(
+                        label="📥 Download Full Chat as PDF",
+                        data=full_chat_pdf,
+                        file_name=derive_pdf_filename(chat_title_str, prefix="Chat"),
+                        mime="application/pdf",
+                        key=f"dl_full_chat_{active_chat_id}",
+                        use_container_width=True
+                    )
+                except Exception as pdf_err:
+                    st.caption(f"PDF export unavailable: {pdf_err}")
 
         st.markdown("---")
 
@@ -639,10 +759,40 @@ if page == "AI Tutor":
                     st.rerun()
 
         # Render Chat History
-        for msg in messages:
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
-                if msg["sources"]:
+        for msg_idx, msg in enumerate(messages):
+            role = msg["role"]
+            with st.chat_message(role):
+                st.markdown(msg["content"])
+                
+                if role == "assistant":
+                    # Action row below AI response: Copy and Real PDF Download
+                    act_c1, act_c2 = st.columns([0.72, 0.28])
+                    with act_c2:
+                        try:
+                            # Generate dynamic real PDF from this exact response
+                            response_title = f"{format_subject(chat_subject)} Study Notes"
+                            if msg_idx > 0 and messages[msg_idx - 1]["role"] == "user":
+                                response_title = messages[msg_idx - 1]["content"][:40]
+                                
+                            single_pdf_bytes = generate_response_pdf(
+                                title=response_title,
+                                content=msg["content"],
+                                student_name=user_display,
+                                subject=chat_subject
+                            )
+                            pdf_fname = derive_pdf_filename(response_title)
+                            st.download_button(
+                                label="📥 Download as PDF",
+                                data=single_pdf_bytes,
+                                file_name=pdf_fname,
+                                mime="application/pdf",
+                                key=f"dl_resp_pdf_{msg['id']}",
+                                use_container_width=True
+                            )
+                        except Exception:
+                            pass
+
+                if msg.get("sources"):
                     with st.expander("Reference Sources"):
                         for source in msg["sources"]:
                             st.markdown(f"""
@@ -659,7 +809,7 @@ if page == "AI Tutor":
 
         if prompt:
             with st.chat_message("user"):
-                st.write(prompt)
+                st.markdown(prompt)
 
             save_chat_message(active_chat_id, "user", prompt, user_id=user_id)
 
@@ -688,38 +838,43 @@ if page == "AI Tutor":
                     else:
                         answer = "I couldn't find this information in your uploaded notes."
                         with st.chat_message("assistant"):
-                            st.write(answer)
+                            st.markdown(answer)
                         save_chat_message(active_chat_id, "assistant", answer, sources=[], user_id=user_id)
                         st.rerun()
 
-            with st.spinner("Generating response..."):
-                try:
-                    full_history = []
-                    for msg in messages:
-                        full_history.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
+            with st.chat_message("assistant"):
+                full_history = []
+                for m in messages:
                     full_history.append({
-                        "role": "user",
-                        "content": prompt
+                        "role": m["role"],
+                        "content": m["content"]
                     })
+                full_history.append({
+                    "role": "user",
+                    "content": prompt
+                })
 
-                    answer = ask_ai_chat(full_history, context=context, mode=mode, notes_only=notes_only)
+                try:
+                    # GPT-Style Streaming Token Output
+                    stream_gen = ask_ai_chat_stream(
+                        messages=full_history,
+                        context=context,
+                        mode=mode,
+                        notes_only=notes_only
+                    )
+                    full_answer = st.write_stream(stream_gen)
 
-                    with st.chat_message("assistant"):
-                        st.write(answer)
-                        if sources:
-                            with st.expander("Reference Sources"):
-                                for source in sources:
-                                    st.markdown(f"""
-                                    <div class="citation-card">
-                                        <div class="citation-header">Source: 📄 <b>{source['source']}</b> &bull; Page {source['page']} (Relevance: {source['score']:.2f})</div>
-                                        <div>{source['text']}</div>
-                                    </div>
-                                    """, unsafe_allow_html=True)
+                    if sources:
+                        with st.expander("Reference Sources"):
+                            for source in sources:
+                                st.markdown(f"""
+                                <div class="citation-card">
+                                    <div class="citation-header">Source: 📄 <b>{source['source']}</b> &bull; Page {source['page']} (Relevance: {source['score']:.2f})</div>
+                                    <div>{source['text']}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
 
-                    save_chat_message(active_chat_id, "assistant", answer, sources=sources, user_id=user_id)
+                    save_chat_message(active_chat_id, "assistant", full_answer, sources=sources, user_id=user_id)
 
                     if len(messages) == 0:
                         new_title = prompt[:30] + "..." if len(prompt) > 30 else prompt
@@ -727,10 +882,10 @@ if page == "AI Tutor":
 
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Response error: {e}")
+                    st.error(f"Response generation error: {e}")
 
         st.markdown(
-            '<div class="chat-disclaimer">AI Study Assistant provides educational guidance. Verify important formulas and exam facts with your course syllabus.</div>',
+            '<div class="chat-disclaimer">AI Study Assistant provides verified educational guidance. Responses can be saved or exported as real PDF notes at any time.</div>',
             unsafe_allow_html=True
         )
 
@@ -741,15 +896,16 @@ if page == "AI Tutor":
 
 elif page == "Dashboard":
     profile = get_profile(user_id=user_id)
+    dash_name = profile[0] if profile and profile[0] else user_display
+    dash_course = profile[1] if profile and profile[1] else user_course
+    dash_sem = profile[2] if profile and profile[2] else user_semester
 
-    if profile:
-        name, course, semester = profile
-        st.markdown(f"""
-        <div class="ui-card">
-            <h3 class="ui-card-title">Welcome back, {name}</h3>
-            <p class="ui-card-subtitle">{course} &bull; Semester {semester}</p>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="ui-card">
+        <h3 class="ui-card-title">Welcome back, {dash_name}</h3>
+        <p class="ui-card-subtitle">{dash_course} &bull; Semester {dash_sem}</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     performance = get_topic_performance(user_id=user_id)
     df = load_performance_data(performance)
@@ -777,19 +933,27 @@ elif page == "Dashboard":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Active Background Jobs summary
+    # Active Background Tasks summary (Document Indexing & Quiz Generation)
     user_jobs = get_user_document_jobs(user_id=user_id)
-    active_jobs = [j for j in user_jobs if j["status"] in ("queued", "processing")]
-    if active_jobs:
+    active_doc_jobs = [j for j in user_jobs if j["status"] in ("queued", "processing")]
+    user_quiz_jobs = get_user_quiz_jobs(user_id=user_id)
+    active_quiz_jobs = [q for q in user_quiz_jobs if q["status"] in ("pending", "processing")]
+
+    if active_doc_jobs or active_quiz_jobs:
         st.markdown("""
-        <div class="ui-card" style="border-left: 4px solid #f59e0b;">
-            <h4 class="ui-card-title">Active Background Indexing Tasks</h4>
-            <p class="ui-card-subtitle">Your PDF notes are processing independently in the background.</p>
+        <div class="ui-card" style="border-left: 4px solid #6366f1;">
+            <h4 class="ui-card-title">⚡ Active Background Tasks</h4>
+            <p class="ui-card-subtitle">Your document indexing and quiz generation tasks continue running independently in the background.</p>
         </div>
         """, unsafe_allow_html=True)
-        for job in active_jobs:
-            st.write(f"**{job['filename']}** ({format_subject(job['subject'])}) — {job['status'].upper()} ({job['progress']}%)")
+
+        for job in active_doc_jobs:
+            st.write(f"📄 **Document Indexing:** {job['filename']} ({format_subject(job['subject'])}) — {job['status'].upper()} ({job['progress']}%)")
             st.progress(job["progress"] / 100.0)
+
+        for qjob in active_quiz_jobs:
+            st.write(f"🎯 **Quiz Generation:** {qjob['topic']} ({qjob['difficulty']}) — {qjob['status'].upper()} ({qjob['progress']}%)")
+            st.progress(qjob["progress"] / 100.0)
 
     if not df.empty:
         st.markdown("""
@@ -806,255 +970,816 @@ elif page == "Dashboard":
 
 
 # ==================================================
-# REQUIREMENT 2: STUDY MATERIAL & PERSISTENT NOTES Q&A
+# REQUIREMENT 2 & 3: STUDY MATERIAL, MULTI-NOTES & OCR
 # ==================================================
 
 elif page == "Study Material":
-    st.subheader("Study Material & Notes")
-    st.caption("Upload course notes with background indexing, or directly ask questions from your completed study materials.")
+    st.subheader("Study Material & Multi-Notes Studio")
+    st.caption("Create unlimited persistent notes, upload learning materials across all formats (PDF, DOC, DOCX, Screenshots/Images with OCR), and use them seamlessly.")
 
-    # Subject Selector and Add Subject Row
-    sub_col1, sub_col2 = st.columns([0.7, 0.3])
-    with sub_col1:
-        subject = st.selectbox(
-            "Select Subject",
-            available_subjects,
-            format_func=lambda s: format_subject(s)
-        )
-    with sub_col2:
-        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-        with st.expander("+ Add New Subject"):
-            new_subj_input = st.text_input("New Subject Name", placeholder="e.g. Cloud Computing", key="new_subj_input")
-            if st.button("Add Subject", type="primary"):
-                if new_subj_input.strip():
-                    ok, msg = add_subject(new_subj_input)
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                else:
-                    st.warning("Please enter a subject name.")
-
-    uploaded_file = st.file_uploader("Upload Notes (PDF)", type=["pdf"], key="pdf_uploader")
-
-    if uploaded_file:
-        existing_doc = check_duplicate_document(user_id, uploaded_file.name, subject)
-        if existing_doc and existing_doc["status"] == "completed":
-            st.info(f"ℹ️ '{uploaded_file.name}' is already indexed and ready in your library below. You can ask questions directly or re-index if updated.")
-
-        if st.button("Process & Index Notes (Background)", type="primary"):
-            try:
-                # Save file immediately to user's isolated directory
-                user_notes_dir = get_user_notes_dir(user_id, subject)
-                pdf_path = user_notes_dir / uploaded_file.name
-                file_bytes = uploaded_file.getbuffer()
-
-                with open(pdf_path, "wb") as f:
-                    f.write(file_bytes)
-
-                # Start background indexing worker
-                doc_id, job_id = start_background_indexing(
-                    user_id=user_id,
-                    filename=uploaded_file.name,
-                    file_path=str(pdf_path),
-                    subject=subject,
-                    file_size=len(file_bytes)
-                )
-
-                st.success(f"Processing job started for '{uploaded_file.name}' in the background! You can navigate to other pages anytime.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to start processing job: {e}")
+    tab_library, tab_notes_studio = st.tabs([
+        "📚 Uploaded Materials & Learning Hub",
+        "📝 Multi-Notes Studio"
+    ])
 
     # --------------------------------------------------
-    # REQUIREMENT 2: DEDICATED STUDY MATERIAL QUESTION-ANSWER AREA
+    # TAB 1: UPLOADED MATERIALS & OCR LEARNING HUB
     # --------------------------------------------------
-    st.markdown("---")
-    st.markdown("""
-    <div class="ui-card" style="border-left: 4px solid #6366f1;">
-        <h3 class="ui-card-title">📚 Ask Questions About Your Notes</h3>
-        <p class="ui-card-subtitle">Select any of your uploaded completed documents and get grounded answers with page citations.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    with tab_library:
+        st.markdown("""
+        <div class="ui-card">
+            <h4 class="ui-card-title">📤 Upload New Learning Material</h4>
+            <p class="ui-card-subtitle">Supported formats: PDF (with scanned OCR fallback), Word DOCX, DOC, Images (PNG, JPG, JPEG, WEBP with OCR), Plaintext, and Markdown (Max 25MB).</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    completed_docs = get_user_completed_documents(user_id)
-
-    if not completed_docs:
-        st.info("No completed study materials yet. Upload and index a PDF above to ask questions.")
-    else:
-        doc_map = {f"📄 {d['filename']} ({format_subject(d['subject'])})": d for d in completed_docs}
-        selected_label = st.selectbox(
-            "Selected Document",
-            list(doc_map.keys()),
-            key="sm_selected_doc"
-        )
-        selected_doc = doc_map[selected_label]
-
-        sm_q_col1, sm_q_col2 = st.columns([0.84, 0.16])
-        with sm_q_col1:
-            sm_question = st.text_input(
-                "Question",
-                placeholder=f"Ask a question about {selected_doc['filename']}...",
-                key="sm_question_input",
-                label_visibility="collapsed"
+        up_col1, up_col2 = st.columns([0.65, 0.35])
+        with up_col1:
+            subject = st.selectbox(
+                "Select Subject",
+                available_subjects,
+                format_func=lambda s: format_subject(s),
+                key="sm_subject_select"
             )
-        with sm_q_col2:
-            sm_ask_btn = st.button("Ask Question", type="primary", use_container_width=True, key="sm_ask_btn")
-
-        if sm_ask_btn:
-            if not sm_question.strip():
-                st.warning("⚠️ Please enter a question.")
-            else:
-                with st.spinner("Searching document notes..."):
-                    results = search_user_notes(
-                        question=sm_question.strip(),
-                        user_id=user_id,
-                        document_name=selected_doc["filename"],
-                        subject=selected_doc["subject"],
-                        top_k=5
-                    )
-
-                    if not results:
-                        answer_text = "I couldn't find this information in the selected uploaded notes."
-                        sources_list = []
+        with up_col2:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            with st.expander("+ Add New Subject"):
+                new_subj_input = st.text_input("New Subject Name", placeholder="e.g. Cloud Computing", key="new_subj_input")
+                if st.button("Add Subject", type="primary", key="btn_add_subj"):
+                    if new_subj_input.strip():
+                        ok, msg = add_subject(new_subj_input)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
                     else:
-                        context = "\n\n".join(r["text"] for r in results)
-                        sources_list = [{
-                            "source": r["source"],
-                            "page": r["page"],
-                            "text": r["text"],
-                            "score": r["score"]
-                        } for r in results]
-                        answer_text = ask_ai(sm_question.strip(), context=context)
+                        st.warning("Please enter a subject name.")
 
-                    st.session_state.study_material_qa_history.insert(0, {
-                        "question": sm_question.strip(),
-                        "answer": answer_text,
-                        "document": selected_doc["filename"],
-                        "sources": sources_list,
-                        "timestamp": datetime.now().strftime("%H:%M:%S")
-                    })
+        uploaded_file = st.file_uploader(
+            "Choose Document or Screenshot/Image File",
+            type=SUPPORTED_FILE_EXTENSIONS,
+            key="multi_material_uploader",
+            help=f"Upload PDF documents, scanned lecture slides/diagrams (PNG/JPG/WEBP), Word docs (DOC/DOCX), or notes (Max {MAX_UPLOAD_SIZE_MB}MB)."
+        )
 
-        # Display Study Material Q&A Results
-        if st.session_state.study_material_qa_history:
-            for item in st.session_state.study_material_qa_history[:5]:
-                st.markdown(f"""
+        if uploaded_file:
+            file_bytes = uploaded_file.getvalue()
+            file_size_mb = len(file_bytes) / (1024 * 1024)
+            ext = Path(uploaded_file.name).suffix.lower()
+
+            # Validation
+            if len(file_bytes) == 0:
+                st.error("⚠️ The uploaded file is empty. Please upload a valid document or image.")
+            elif file_size_mb > MAX_UPLOAD_SIZE_MB:
+                st.error(f"⚠️ File size ({file_size_mb:.1f} MB) exceeds maximum allowed limit of {MAX_UPLOAD_SIZE_MB} MB.")
+            elif ext[1:] not in SUPPORTED_FILE_EXTENSIONS:
+                st.error(f"⚠️ Unsupported file type '{ext}'. Supported formats: {', '.join(SUPPORTED_FILE_EXTENSIONS)}")
+            else:
+                is_img = ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff")
+                file_desc = "Screenshot / Image" if is_img else "Document"
+                st.success(f"✅ {file_desc} selected: **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
+
+                existing_doc = check_duplicate_document(user_id, uploaded_file.name, subject)
+                if existing_doc and existing_doc["status"] == "completed":
+                    st.info(f"ℹ️ '{uploaded_file.name}' is already indexed in your library. You can study it below or re-process if updated.")
+
+                if st.button("🚀 Process & Extract Content (OCR & Indexing)", type="primary", use_container_width=True):
+                    try:
+                        user_notes_dir = get_user_notes_dir(user_id, subject)
+                        saved_path = user_notes_dir / uploaded_file.name
+
+                        with open(saved_path, "wb") as f:
+                            f.write(file_bytes)
+
+                        doc_id, job_id = start_background_indexing(
+                            user_id=user_id,
+                            filename=uploaded_file.name,
+                            file_path=str(saved_path),
+                            subject=subject,
+                            file_size=len(file_bytes),
+                            file_type=ext[1:]
+                        )
+
+                        st.session_state.active_document_id = doc_id
+                        st.session_state.active_doc_summary = None
+                        st.session_state.active_doc_flashcards = None
+                        st.session_state.active_doc_notes = None
+
+                        st.success(f"Processing started: **Uploading → Processing → Extracting text → Completed**. OCR and indexing running in background.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to start processing: {e}")
+
+        st.markdown("---")
+        user_docs = get_user_documents(user_id)
+
+        if not user_docs:
+            st.info("💡 No learning materials uploaded yet. Upload a document or screenshot above to activate the learning hub.")
+        else:
+            st.markdown("### 📚 Active Study Material Hub")
+            st.caption("Select any uploaded document or screenshot to ask questions, view AI summaries, practice flashcards, or generate notes.")
+
+            doc_dict = {f"📄 {d['filename']} ({format_subject(d['subject'])})": d for d in user_docs}
+            doc_labels = list(doc_dict.keys())
+
+            selected_idx = 0
+            if st.session_state.active_document_id:
+                for i, d in enumerate(user_docs):
+                    if d["id"] == st.session_state.active_document_id:
+                        selected_idx = i
+                        break
+
+            active_doc_label = st.selectbox(
+                "Selected Active Material",
+                doc_labels,
+                index=selected_idx,
+                key="active_doc_picker"
+            )
+            active_doc = doc_dict[active_doc_label]
+            st.session_state.active_document_id = active_doc["id"]
+
+            user_jobs = get_user_document_jobs(user_id)
+            active_job = next((j for j in user_jobs if j.get("document_id") == active_doc["id"]), None)
+            current_status = active_job["status"] if active_job else active_doc.get("status", "completed")
+            current_progress = active_job["progress"] if active_job else 100
+            error_msg = active_job.get("error_message") if active_job else None
+
+            if current_status == "completed":
+                badge_html = '<span class="badge-completed">🟢 COMPLETED & READY</span>'
+            elif current_status == "processing":
+                badge_html = f'<span class="badge-processing">🟡 EXTRACTING TEXT ({current_progress}%)</span>'
+            elif current_status == "failed":
+                badge_html = '<span class="badge-failed">🔴 PROCESSING FAILED</span>'
+            else:
+                badge_html = '<span class="badge-queued">⚪ QUEUED</span>'
+
+            st.markdown(f"""
+            <div class="doc-info-banner">
+                <div>
+                    <strong>{active_doc['filename']}</strong> &bull; Subject: <em>{format_subject(active_doc['subject'])}</em> &bull; Size: {active_doc['file_size'] / 1024:.1f} KB
+                </div>
+                <div>
+                    {badge_html}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if current_status == "processing":
+                st.progress(current_progress / 100.0)
+                p_col1, p_col2 = st.columns([0.8, 0.2])
+                with p_col1:
+                    st.info(f"⏳ Status: **Uploading → Processing → Extracting text** ({current_progress}%)... Text is being extracted & OCR processed.")
+                with p_col2:
+                    if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_proc"):
+                        st.rerun()
+
+            elif current_status == "failed":
+                st.error(f"❌ Processing failed for '{active_doc['filename']}': {error_msg or 'Unknown error'}")
+                if st.button("🔄 Retry Processing", type="primary", key="btn_retry_proc"):
+                    try:
+                        start_background_indexing(
+                            user_id=user_id,
+                            filename=active_doc["filename"],
+                            file_path=active_doc["file_path"],
+                            subject=active_doc["subject"],
+                            file_size=active_doc["file_size"],
+                            file_type=active_doc.get("file_type", "pdf")
+                        )
+                        st.success("Retry job initiated!")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Retry failed: {ex}")
+
+            elif current_status == "completed":
+                cached_text = active_doc.get("extracted_text", "")
+                if not cached_text and Path(active_doc["file_path"]).exists():
+                    cached_text = get_full_document_text(active_doc["file_path"])
+
+                tab_qa, tab_summary, tab_flashcards, tab_notes = st.tabs([
+                    "💬 Ask Questions & Q&A",
+                    "📝 Summarize Document",
+                    "🗂️ Interactive Flashcards",
+                    "💡 Key Notes & Concept Explanation"
+                ])
+
+                # TAB 1: Grounded Q&A
+                with tab_qa:
+                    st.markdown(f"#### Ask Questions About *{active_doc['filename']}*")
+                    st.caption("Ask questions grounded strictly in the content of your selected notes with verified page citations.")
+
+                    qa_col1, qa_col2 = st.columns([0.84, 0.16])
+                    with qa_col1:
+                        sm_question = st.text_input(
+                            "Question",
+                            placeholder=f"Ask a question about {active_doc['filename']}...",
+                            key="sm_question_input",
+                            label_visibility="collapsed"
+                        )
+                    with qa_col2:
+                        sm_ask_btn = st.button("Ask Question", type="primary", use_container_width=True, key="sm_ask_btn")
+
+                    if sm_ask_btn:
+                        if not sm_question.strip():
+                            st.warning("⚠️ Please enter a question.")
+                        else:
+                            with st.spinner("Searching document notes..."):
+                                results = search_user_notes(
+                                    question=sm_question.strip(),
+                                    user_id=user_id,
+                                    document_name=active_doc["filename"],
+                                    subject=active_doc["subject"],
+                                    top_k=5
+                                )
+
+                                if not results:
+                                    answer_text = "I couldn't find this information in the selected uploaded notes."
+                                    sources_list = []
+                                else:
+                                    context = "\n\n".join(r["text"] for r in results)
+                                    sources_list = [{
+                                        "source": r["source"],
+                                        "page": r["page"],
+                                        "text": r["text"],
+                                        "score": r["score"]
+                                    } for r in results]
+                                    answer_text = ask_ai(sm_question.strip(), context=context)
+
+                                st.session_state.study_material_qa_history.insert(0, {
+                                    "question": sm_question.strip(),
+                                    "answer": answer_text,
+                                    "document": active_doc["filename"],
+                                    "sources": sources_list,
+                                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                                })
+
+                    if st.session_state.study_material_qa_history:
+                        for item in st.session_state.study_material_qa_history[:5]:
+                            st.markdown(f"""
+                            <div class="ui-card">
+                                <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                                    <strong style="color:#0f172a; font-size:1.02rem;">Q: {item['question']}</strong>
+                                    <span style="font-size:0.78rem; color:#64748b;">📄 {item['document']} &bull; {item['timestamp']}</span>
+                                </div>
+                                <div style="font-size:0.95rem; color:#334155; margin-bottom:8px; line-height:1.5;">{item['answer']}</div>
+                            """, unsafe_allow_html=True)
+
+                            if item["sources"]:
+                                with st.expander("View Page Citations"):
+                                    for s in item["sources"]:
+                                        st.markdown(f"""
+                                        <div class="citation-card">
+                                            <div class="citation-header">Source: 📄 <b>{s['source']}</b> &bull; Page {s['page']} (Relevance: {s['score']:.2f})</div>
+                                            <div>{s['text']}</div>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                # TAB 2: Summarize
+                with tab_summary:
+                    st.markdown(f"#### AI Summary for *{active_doc['filename']}*")
+                    st.caption("Generate structured takeaways, key definitions, and exam focal points directly from this material.")
+
+                    sum_style = st.radio("Summary Style", ["Detailed", "Executive / Bulleted"], horizontal=True, key="sum_style_radio")
+
+                    if st.button("Generate Summary", type="primary", key="btn_gen_sum"):
+                        if not cached_text:
+                            st.warning("No readable text found in document to summarize.")
+                        else:
+                            with st.spinner("Analyzing document and crafting comprehensive summary..."):
+                                try:
+                                    summary_res = generate_summary(cached_text, summary_type=sum_style)
+                                    st.session_state.active_doc_summary = summary_res
+                                except Exception as ex:
+                                    st.error(f"Summarization error: {ex}")
+
+                    if st.session_state.active_doc_summary:
+                        st.markdown("""
+                        <div class="ui-card">
+                        """, unsafe_allow_html=True)
+                        st.markdown(st.session_state.active_doc_summary)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                        try:
+                            sum_pdf_bytes = generate_response_pdf(
+                                title=f"Summary: {active_doc['filename']}",
+                                content=st.session_state.active_doc_summary,
+                                student_name=user_display,
+                                subject=active_doc["subject"]
+                            )
+                            st.download_button(
+                                label="📥 Download Summary as PDF",
+                                data=sum_pdf_bytes,
+                                file_name=f"Summary_{Path(active_doc['filename']).stem}.pdf",
+                                mime="application/pdf",
+                                key="dl_summary_pdf"
+                            )
+                        except Exception:
+                            pass
+
+                # TAB 3: Flashcards
+                with tab_flashcards:
+                    st.markdown(f"#### Interactive Flashcards for *{active_doc['filename']}*")
+                    st.caption("Test your recall with AI-generated concept cards from this material.")
+
+                    fc_col1, fc_col2 = st.columns([0.6, 0.4])
+                    with fc_col1:
+                        num_cards = st.slider("Number of Flashcards", min_value=3, max_value=12, value=6, key="fc_slider")
+                    with fc_col2:
+                        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                        gen_fc_btn = st.button("Generate Flashcards", type="primary", use_container_width=True, key="btn_gen_fc")
+
+                    if gen_fc_btn:
+                        if not cached_text:
+                            st.warning("No readable text found in document to generate flashcards.")
+                        else:
+                            with st.spinner("Synthesizing interactive flashcards..."):
+                                try:
+                                    fc_list = generate_flashcards(cached_text, num_cards=num_cards)
+                                    st.session_state.active_doc_flashcards = fc_list
+                                    st.session_state.active_card_idx = 0
+                                    st.session_state.show_card_back = False
+                                except Exception as ex:
+                                    st.error(f"Flashcard generation error: {ex}")
+
+                    if st.session_state.active_doc_flashcards:
+                        cards = st.session_state.active_doc_flashcards
+                        card_idx = st.session_state.active_card_idx % len(cards)
+                        curr_card = cards[card_idx]
+
+                        st.markdown(f"**Card {card_idx + 1} of {len(cards)}**")
+                        st.markdown(f"""
+                        <div class="flashcard-box">
+                            <span class="flashcard-tag">{curr_card.get('tag', 'Concept')}</span>
+                            <div class="flashcard-front">{curr_card.get('front', '')}</div>
+                            {f'<div class="flashcard-back">{curr_card.get("back", "")}</div>' if st.session_state.show_card_back else '<div style="color:#94a3b8; font-size:0.85rem; margin-top:0.8rem;">(Click Reveal Answer below)</div>'}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        btn_c1, btn_c2, btn_c3 = st.columns([0.33, 0.34, 0.33])
+                        with btn_c1:
+                            if st.button("⬅️ Previous Card", use_container_width=True, key="btn_prev_card"):
+                                st.session_state.active_card_idx = (card_idx - 1) % len(cards)
+                                st.session_state.show_card_back = False
+                                st.rerun()
+                        with btn_c2:
+                            toggle_lbl = "🙈 Hide Answer" if st.session_state.show_card_back else "👁️ Reveal Answer"
+                            if st.button(toggle_lbl, type="primary", use_container_width=True, key="btn_flip_card"):
+                                st.session_state.show_card_back = not st.session_state.show_card_back
+                                st.rerun()
+                        with btn_c3:
+                            if st.button("Next Card ➡️", use_container_width=True, key="btn_next_card"):
+                                st.session_state.active_card_idx = (card_idx + 1) % len(cards)
+                                st.session_state.show_card_back = False
+                                st.rerun()
+
+                # TAB 4: Notes & Concept Explanation
+                with tab_notes:
+                    st.markdown(f"#### Structured Concept Explanation for *{active_doc['filename']}*")
+                    st.caption("Deep-dive breakdowns, step-by-step explanations, and real-world analogies.")
+
+                    focus_concept = st.text_input("Specific Concept to Focus On (Optional)", placeholder="e.g. Memory Hierarchy, Paging, Deadlock Avoidance...", key="notes_focus_input")
+
+                    if st.button("Generate Detailed Concept Breakdown", type="primary", key="btn_gen_notes"):
+                        if not cached_text:
+                            st.warning("No readable text found in document to explain.")
+                        else:
+                            with st.spinner("Generating pedagogical explanation and analogies..."):
+                                try:
+                                    notes_res = generate_notes_explanation(cached_text, focus_area=focus_concept)
+                                    st.session_state.active_doc_notes = notes_res
+                                except Exception as ex:
+                                    st.error(f"Explanation error: {ex}")
+
+                    if st.session_state.active_doc_notes:
+                        st.markdown("""
+                        <div class="ui-card">
+                        """, unsafe_allow_html=True)
+                        st.markdown(st.session_state.active_doc_notes)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                        try:
+                            breakdown_pdf_bytes = generate_response_pdf(
+                                title=f"Explanation: {focus_concept or active_doc['filename']}",
+                                content=st.session_state.active_doc_notes,
+                                student_name=user_display,
+                                subject=active_doc["subject"]
+                            )
+                            st.download_button(
+                                label="📥 Download Breakdown as PDF",
+                                data=breakdown_pdf_bytes,
+                                file_name=derive_pdf_filename(focus_concept or active_doc['filename'], prefix="Explanation"),
+                                mime="application/pdf",
+                                key="dl_breakdown_pdf"
+                            )
+                        except Exception:
+                            pass
+
+        st.markdown("---")
+        st.subheader("All Uploaded Documents & Processing Status")
+        st.caption("Real-time persistent status of your uploaded materials and vector indexes.")
+
+        col_ref1, col_ref2 = st.columns([0.85, 0.15])
+        with col_ref2:
+            if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_all_jobs"):
+                st.rerun()
+
+        jobs = get_user_document_jobs(user_id=user_id)
+
+        if not jobs:
+            st.info("No documents uploaded yet. Upload a file above to view processing status.")
+        else:
+            for job in jobs:
+                st.markdown("""
                 <div class="ui-card">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                        <strong style="color:#0f172a; font-size:1.02rem;">Q: {item['question']}</strong>
-                        <span style="font-size:0.78rem; color:#64748b;">📄 {item['document']} &bull; {item['timestamp']}</span>
-                    </div>
-                    <div style="font-size:0.95rem; color:#334155; margin-bottom:8px; line-height:1.5;">{item['answer']}</div>
                 """, unsafe_allow_html=True)
 
-                if item["sources"]:
-                    with st.expander("View Page Citations"):
-                        for s in item["sources"]:
-                            st.markdown(f"""
-                            <div class="citation-card">
-                                <div class="citation-header">Source: 📄 <b>{s['source']}</b> &bull; Page {s['page']} (Relevance: {s['score']:.2f})</div>
-                                <div>{s['text']}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                status = job["status"]
+                if status == "completed":
+                    badge_html = '<span class="badge-completed">🟢 COMPLETED</span>'
+                elif status == "processing":
+                    badge_html = f'<span class="badge-processing">🟡 PROCESSING ({job["progress"]}%)</span>'
+                elif status == "failed":
+                    badge_html = '<span class="badge-failed">🔴 FAILED</span>'
+                else:
+                    badge_html = '<span class="badge-queued">⚪ QUEUED</span>'
+
+                j_col1, j_col2 = st.columns([0.7, 0.3])
+                with j_col1:
+                    st.markdown(f"**{job['filename']}** &nbsp; {badge_html}", unsafe_allow_html=True)
+                    st.caption(f"Subject: **{format_subject(job['subject'])}** &bull; Created: {job['created_at'][:19].replace('T', ' ')}")
+                with j_col2:
+                    if job["completed_at"]:
+                        st.caption(f"Completed: {job['completed_at'][:19].replace('T', ' ')}")
+
+                if status == "processing":
+                    st.progress(job["progress"] / 100.0)
+
+                if status == "failed" and job["error_message"]:
+                    st.error(f"Error: {job['error_message']}")
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
     # --------------------------------------------------
-    # PERSISTENT JOBS & DOCUMENT STATUS MONITOR
+    # TAB 2: MULTI-NOTES STUDIO (UNLIMITED PERSISTENT NOTES)
     # --------------------------------------------------
-    st.markdown("---")
-    st.subheader("Document Processing Status")
-    st.caption("Real-time persistent status of your uploaded documents and vector index generation.")
+    with tab_notes_studio:
+        st.markdown("""
+        <div class="ui-card">
+            <h4 class="ui-card-title">📝 Multi-Notes Studio</h4>
+            <p class="ui-card-subtitle">Create, organize, and edit unlimited study notes with rich Markdown formatting, attached screenshots/documents, and persistent user storage.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    col_ref1, col_ref2 = st.columns([0.85, 0.15])
-    with col_ref2:
-        if st.button("🔄 Refresh Status", use_container_width=True):
-            st.rerun()
+        note_top_col1, note_top_col2, note_top_col3 = st.columns([0.45, 0.35, 0.20])
+        with note_top_col1:
+            note_search = st.text_input("🔍 Search Notes", placeholder="Search by title or topic...", key="note_search_box")
+        with note_top_col2:
+            note_subj_filter = st.selectbox("Filter by Subject", ["All Subjects"] + available_subjects, format_func=lambda s: "All Subjects" if s == "All Subjects" else format_subject(s), key="note_subj_filter")
+        with note_top_col3:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("+ New Note", type="primary", use_container_width=True, key="btn_create_new_note"):
+                new_note_id = create_note(
+                    user_id=user_id,
+                    title="New Study Note",
+                    content="# Notes\n\n- Key concepts:\n- Important definitions:\n- Formulas/Examples:",
+                    subject=note_subj_filter if note_subj_filter != "All Subjects" else "General"
+                )
+                st.session_state.active_note_id = new_note_id
+                st.success("New note created!")
+                st.rerun()
 
-    jobs = get_user_document_jobs(user_id=user_id)
+        user_notes = get_user_notes(user_id=user_id, subject=note_subj_filter)
+        if note_search.strip():
+            user_notes = [n for n in user_notes if note_search.lower() in n["title"].lower() or note_search.lower() in n["content"].lower()]
 
-    if not jobs:
-        st.info("No documents uploaded yet. Upload a PDF above to create a vector index.")
-    else:
-        for job in jobs:
-            st.markdown("""
-            <div class="ui-card">
-            """, unsafe_allow_html=True)
+        # Active Note Editor
+        if st.session_state.active_note_id is not None:
+            active_note = get_note_by_id(st.session_state.active_note_id, user_id=user_id)
+            if active_note:
+                st.markdown("---")
+                st.markdown(f"### ✏️ Editing Note: *{active_note['title']}*")
+                
+                ed_c1, ed_c2 = st.columns([0.65, 0.35])
+                with ed_c1:
+                    edit_title = st.text_input("Note Title", value=active_note["title"], key=f"note_title_{active_note['id']}")
+                with ed_c2:
+                    curr_subj = active_note["subject"]
+                    subj_idx = available_subjects.index(curr_subj) if curr_subj in available_subjects else 0
+                    edit_subject = st.selectbox("Subject", available_subjects, index=subj_idx, format_func=lambda s: format_subject(s), key=f"note_subj_{active_note['id']}")
 
-            status = job["status"]
-            if status == "completed":
-                badge_html = '<span class="badge-completed">🟢 COMPLETED</span>'
-            elif status == "processing":
-                badge_html = f'<span class="badge-processing">🟡 PROCESSING ({job["progress"]}%)</span>'
-            elif status == "failed":
-                badge_html = '<span class="badge-failed">🔴 FAILED</span>'
-            else:
-                badge_html = '<span class="badge-queued">⚪ QUEUED</span>'
+                # Associated files selector
+                completed_docs = get_user_completed_documents(user_id)
+                available_doc_names = [d["filename"] for d in completed_docs]
+                curr_attached = [f for f in active_note.get("associated_files", []) if f in available_doc_names]
+                edit_attached = st.multiselect("Associated Uploads / Screenshots", available_doc_names, default=curr_attached, key=f"note_files_{active_note['id']}")
 
-            j_col1, j_col2 = st.columns([0.7, 0.3])
-            with j_col1:
-                st.markdown(f"**{job['filename']}** &nbsp; {badge_html}", unsafe_allow_html=True)
-                st.caption(f"Subject: **{format_subject(job['subject'])}** &bull; Created: {job['created_at'][:19].replace('T', ' ')}")
-            with j_col2:
-                if job["completed_at"]:
-                    st.caption(f"Completed: {job['completed_at'][:19].replace('T', ' ')}")
+                edit_content = st.text_area(
+                    "Note Content (Markdown supported)",
+                    value=active_note["content"],
+                    height=280,
+                    key=f"note_content_{active_note['id']}"
+                )
 
-            if status == "processing":
-                st.progress(job["progress"] / 100.0)
+                btn_s1, btn_s2, btn_s3, btn_s4 = st.columns([0.25, 0.25, 0.25, 0.25])
+                with btn_s1:
+                    if st.button("💾 Save Note", type="primary", use_container_width=True, key=f"btn_save_note_{active_note['id']}"):
+                        update_note(
+                            note_id=active_note["id"],
+                            user_id=user_id,
+                            title=edit_title,
+                            content=edit_content,
+                            subject=edit_subject,
+                            associated_files=edit_attached
+                        )
+                        st.success("Note saved successfully!")
+                        st.rerun()
 
-            if status == "failed" and job["error_message"]:
-                st.error(f"Error: {job['error_message']}")
+                with btn_s2:
+                    if st.button("❌ Close Editor", use_container_width=True, key="btn_close_note_ed"):
+                        st.session_state.active_note_id = None
+                        st.rerun()
 
-            st.markdown("</div>", unsafe_allow_html=True)
+                with btn_s3:
+                    try:
+                        note_pdf = generate_response_pdf(
+                            title=edit_title,
+                            content=edit_content,
+                            student_name=user_display,
+                            subject=edit_subject
+                        )
+                        st.download_button(
+                            label="📥 Export as PDF",
+                            data=note_pdf,
+                            file_name=derive_pdf_filename(edit_title, prefix="Note"),
+                            mime="application/pdf",
+                            key=f"dl_note_pdf_{active_note['id']}",
+                            use_container_width=True
+                        )
+                    except Exception:
+                        pass
+
+                with btn_s4:
+                    if st.button("🗑️ Delete Note", use_container_width=True, key=f"btn_del_note_{active_note['id']}"):
+                        delete_note(active_note["id"], user_id=user_id)
+                        st.session_state.active_note_id = None
+                        st.success("Note deleted.")
+                        st.rerun()
+
+                st.markdown("---")
+
+        # Display Notes Cards / Grid
+        if not user_notes:
+            st.info("No notes found. Click **+ New Note** above to create your first persistent revision note.")
+        else:
+            st.markdown(f"#### 📋 Your Notes ({len(user_notes)})")
+            for note in user_notes:
+                is_current = (st.session_state.active_note_id == note["id"])
+                border_color = "#6366f1" if is_current else "#e2e8f0"
+
+                st.markdown(f"""
+                <div class="ui-card" style="border-color: {border_color};">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <strong style="font-size:1.1rem; color:#0f172a;">📝 {note['title']}</strong>
+                        <span class="badge-completed">{format_subject(note['subject'])}</span>
+                    </div>
+                    <div style="font-size:0.82rem; color:#64748b; margin-bottom:8px;">
+                        Created: {note['created_at'][:19].replace('T', ' ')} &bull; Updated: {note['updated_at'][:19].replace('T', ' ')}
+                        {f" &bull; 📎 {len(note['associated_files'])} file(s)" if note['associated_files'] else ""}
+                    </div>
+                """, unsafe_allow_html=True)
+
+                with st.expander(f"Preview: {note['title']}"):
+                    st.markdown(note["content"])
+                    if note["associated_files"]:
+                        st.caption(f"Attached files: {', '.join(note['associated_files'])}")
+
+                nc_1, nc_2, nc_3 = st.columns([0.33, 0.33, 0.34])
+                with nc_1:
+                    if st.button("✏️ Edit Note", key=f"open_note_{note['id']}", use_container_width=True):
+                        st.session_state.active_note_id = note["id"]
+                        st.rerun()
+                with nc_2:
+                    try:
+                        n_pdf = generate_response_pdf(
+                            title=note["title"],
+                            content=note["content"],
+                            student_name=user_display,
+                            subject=note["subject"]
+                        )
+                        st.download_button(
+                            label="📥 Download PDF",
+                            data=n_pdf,
+                            file_name=derive_pdf_filename(note["title"], prefix="Note"),
+                            mime="application/pdf",
+                            key=f"dl_card_pdf_{note['id']}",
+                            use_container_width=True
+                        )
+                    except Exception:
+                        pass
+                with nc_3:
+                    if st.button("🗑️ Delete", key=f"card_del_note_{note['id']}", use_container_width=True):
+                        delete_note(note["id"], user_id=user_id)
+                        if st.session_state.active_note_id == note["id"]:
+                            st.session_state.active_note_id = None
+                        st.rerun()
+
+                st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ==================================================
-# QUIZ & PRACTICE (MANUAL TOPIC, TARGET LEVEL, MIN 5 QUESTIONS)
+# REQUIREMENT 4: ADAPTIVE BACKGROUND QUIZ & PRACTICE HUB
 # ==================================================
 
 elif page == "Quiz & Practice":
-    st.subheader("Adaptive Quiz & Practice")
-    st.caption("Generate targeted multiple-choice practice questions specifically for your chosen topic and target level.")
+    st.subheader("Adaptive Background Quiz & Practice Hub")
+    st.caption("Generate targeted quizzes that process independently in the background while you navigate freely across the app.")
 
-    q_col1, q_col2 = st.columns(2)
-    with q_col1:
-        subject = st.selectbox(
-            "Subject",
-            available_subjects,
-            format_func=lambda s: format_subject(s),
-            key="quiz_sub_select"
-        )
-        topic = st.text_input("Topic", placeholder="e.g. Transaction, Normalization, Deadlock, TCP/IP...", key="quiz_top_input")
+    completed_docs = get_user_completed_documents(user_id)
+    user_quiz_jobs = get_user_quiz_jobs(user_id=user_id)
 
-    with q_col2:
-        target_level = st.selectbox(
-            "Target Level",
-            ["Beginner", "Intermediate", "Advanced"],
-            index=1,
-            key="quiz_target_level"
-        )
-        number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_num_slider")
+    # Check for active background quiz jobs
+    active_qjobs = [q for q in user_quiz_jobs if q["status"] in ("pending", "processing")]
+    latest_qjob = user_quiz_jobs[0] if user_quiz_jobs else None
 
-    if st.button("Generate Quiz", type="primary"):
-        if not topic.strip():
-            st.warning("⚠️ Please enter a topic before generating the quiz.")
+    # Persistent Job Progress Banner
+    if active_qjobs:
+        curr_active_qjob = active_qjobs[0]
+        st.markdown(f"""
+        <div class="ui-card" style="border-left: 4px solid #f59e0b; background: #fffbeb;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <h4 style="color:#b45309; margin:0 0 4px 0;">⏳ Quiz Generation in Progress...</h4>
+                    <p style="color:#92400e; margin:0; font-size:0.9rem;">
+                        Generating <strong>{curr_active_qjob['topic']}</strong> ({curr_active_qjob['difficulty']} Level &bull; {curr_active_qjob['number_of_questions']} questions).
+                        You can navigate to <strong>Profile</strong>, <strong>AI Tutor</strong>, or <strong>Dashboard</strong> while it finishes.
+                    </p>
+                </div>
+                <div>
+                    <span class="badge-processing">PROCESSING ({curr_active_qjob['progress']}%)</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.progress(curr_active_qjob["progress"] / 100.0)
+
+        q_ref1, q_ref2 = st.columns([0.8, 0.2])
+        with q_ref2:
+            if st.button("🔄 Refresh Quiz Status", use_container_width=True, key="btn_ref_q_job"):
+                st.rerun()
+
+    elif latest_qjob and latest_qjob["status"] == "completed" and (st.session_state.quiz is None or st.session_state.quiz_submitted):
+        # Notify user a completed quiz is ready to take
+        st.markdown(f"""
+        <div class="ui-card" style="border-left: 4px solid #10b981; background: #f0fdf4;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <h4 style="color:#065f46; margin:0 0 4px 0;">✅ Quiz Generated Successfully!</h4>
+                    <p style="color:#047857; margin:0; font-size:0.9rem;">
+                        <strong>{latest_qjob['topic']}</strong> ({latest_qjob['difficulty']} Level &bull; {latest_qjob['number_of_questions']} questions &bull; Created: {latest_qjob['created_at'][:19].replace('T', ' ')})
+                    </p>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if latest_qjob.get("quiz_data") and latest_qjob["quiz_data"].get("questions"):
+            if st.button("🎯 Start Practicing Generated Quiz", type="primary", use_container_width=True, key=f"btn_start_latest_q_{latest_qjob['id']}"):
+                st.session_state.quiz = latest_qjob["quiz_data"]["questions"]
+                st.session_state.quiz_subject = latest_qjob["subject"]
+                st.session_state.quiz_topic = latest_qjob["topic"]
+                st.session_state.quiz_difficulty = latest_qjob["difficulty"]
+                st.session_state.quiz_answers = {}
+                st.session_state.quiz_submitted = False
+                st.session_state.quiz_score_details = None
+                st.rerun()
+
+    elif latest_qjob and latest_qjob["status"] == "failed":
+        st.error(f"❌ Previous quiz generation failed: {latest_qjob.get('error_message', 'Unknown error')}")
+
+    st.markdown("---")
+
+    # Quiz Generator Form
+    st.markdown("### 🚀 Create New Practice Quiz")
+    quiz_mode = st.radio(
+        "Quiz Source Mode",
+        [
+            "📄 Generate Quiz from Uploaded Material (PDF / Image / DOCX / Notes)",
+            "✍️ Generate Quiz from Custom Topic"
+        ],
+        horizontal=True,
+        key="quiz_source_mode_radio"
+    )
+
+    if "Uploaded Material" in quiz_mode:
+        if not completed_docs:
+            st.info("💡 You have no completed uploaded documents yet. Upload notes in 'Study Material' or switch to 'Custom Topic' mode.")
         else:
-            with st.spinner(f"Generating {target_level} practice questions for '{topic}'..."):
-                try:
-                    quiz_data = generate_quiz(subject, topic.strip(), target_level, number)
-                    st.session_state.quiz = quiz_data["questions"]
-                    st.session_state.quiz_subject = subject
-                    st.session_state.quiz_topic = topic.strip()
-                    st.session_state.quiz_difficulty = target_level
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_submitted = False
-                    st.session_state.quiz_score_details = None
-                    st.success(f"Quiz generated successfully for topic: **{topic.strip()}** ({target_level} Level).")
-                except Exception as e:
-                    st.error(f"Quiz generation error: {e}")
+            q_col1, q_col2 = st.columns(2)
+            with q_col1:
+                doc_map = {f"📄 {d['filename']} ({format_subject(d['subject'])})": d for d in completed_docs}
 
+                def_doc_idx = 0
+                if st.session_state.active_document_id:
+                    for idx, d in enumerate(completed_docs):
+                        if d["id"] == st.session_state.active_document_id:
+                            def_doc_idx = idx
+                            break
+
+                chosen_label = st.selectbox(
+                    "Select Source Document / Notes",
+                    list(doc_map.keys()),
+                    index=def_doc_idx,
+                    key="quiz_doc_select"
+                )
+                chosen_doc = doc_map[chosen_label]
+
+            with q_col2:
+                target_level = st.selectbox(
+                    "Target Level",
+                    ["Beginner", "Intermediate", "Advanced"],
+                    index=1,
+                    key="quiz_mat_target_level"
+                )
+                number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_mat_num_slider")
+
+            if st.button("Start Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_mat"):
+                doc_text = chosen_doc.get("extracted_text", "")
+                if not doc_text and Path(chosen_doc["file_path"]).exists():
+                    doc_text = get_full_document_text(chosen_doc["file_path"])
+
+                if not doc_text.strip():
+                    st.warning(f"⚠️ No readable text found in '{chosen_doc['filename']}' to generate questions.")
+                else:
+                    job_id = start_background_quiz_generation(
+                        user_id=user_id,
+                        subject=chosen_doc["subject"],
+                        topic=f"Material: {chosen_doc['filename']}",
+                        difficulty=target_level,
+                        number_of_questions=number,
+                        source_type="material",
+                        source_id=chosen_doc["id"],
+                        source_name=chosen_doc["filename"],
+                        content=doc_text
+                    )
+                    st.session_state.active_quiz_job_id = job_id
+                    st.session_state.quiz = None
+                    st.session_state.quiz_submitted = False
+                    st.success(f"Quiz job #{job_id} started in background! You can navigate anywhere.")
+                    st.rerun()
+
+    else:
+        # Custom Manual Topic Mode
+        q_col1, q_col2 = st.columns(2)
+        with q_col1:
+            subject = st.selectbox(
+                "Subject",
+                available_subjects,
+                format_func=lambda s: format_subject(s),
+                key="quiz_sub_select"
+            )
+            topic = st.text_input("Topic", placeholder="e.g. Normalization, Process Synchronization, TCP Handshake...", key="quiz_top_input")
+
+        with q_col2:
+            target_level = st.selectbox(
+                "Target Level",
+                ["Beginner", "Intermediate", "Advanced"],
+                index=1,
+                key="quiz_target_level"
+            )
+            number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_num_slider")
+
+        if st.button("🚀 Start Background Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_top"):
+            if not topic.strip():
+                st.warning("⚠️ Please enter a study topic.")
+            else:
+                job_id = start_background_quiz_generation(
+                    user_id=user_id,
+                    subject=subject,
+                    topic=topic.strip(),
+                    difficulty=target_level,
+                    number_of_questions=number,
+                    source_type="topic",
+                    source_name=topic.strip()
+                )
+                st.session_state.active_quiz_job_id = job_id
+                st.session_state.quiz = None
+                st.session_state.quiz_submitted = False
+                st.success(f"Quiz job #{job_id} for '{topic.strip()}' started in background! You can navigate anywhere.")
+                st.rerun()
+
+    # --------------------------------------------------
+    # RENDER ACTIVE QUIZ & SUBMISSION
+    # --------------------------------------------------
     if st.session_state.quiz:
         st.markdown("---")
         quiz = st.session_state.quiz
+
+        st.markdown(f"""
+        <div class="ui-card">
+            <h4 class="ui-card-title">📝 Active Practice Quiz: {st.session_state.quiz_topic}</h4>
+            <p class="ui-card-subtitle">Difficulty: <strong>{st.session_state.quiz_difficulty}</strong> &bull; Total Questions: {len(quiz)}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
         for i, question in enumerate(quiz):
             st.markdown(f"**Question {i + 1}:** {question['question']}")
@@ -1139,6 +1864,37 @@ elif page == "Quiz & Practice":
                             st.session_state.quiz_topic
                         )
                         st.write(explanation)
+
+    # --------------------------------------------------
+    # PREVIOUSLY GENERATED QUIZZES REPOSITORY
+    # --------------------------------------------------
+    if user_quiz_jobs:
+        st.markdown("---")
+        with st.expander("📚 Saved Generated Quizzes & Generation History"):
+            for qj in user_quiz_jobs:
+                q_status = qj["status"]
+                badge = '<span class="badge-completed">COMPLETED</span>' if q_status == "completed" else f'<span class="badge-processing">{q_status.upper()}</span>'
+                
+                st.markdown(f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <strong>{qj['topic']}</strong> ({qj['difficulty']} &bull; {qj['number_of_questions']} questions) &nbsp; {badge}
+                    <span style="font-size:0.8rem; color:#64748b;">{qj['created_at'][:19].replace('T', ' ')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if q_status == "completed" and qj.get("quiz_data") and qj["quiz_data"].get("questions"):
+                    col_q1, col_q2 = st.columns([0.3, 0.7])
+                    with col_q1:
+                        if st.button("🎯 Practice This Quiz", key=f"retake_q_{qj['id']}"):
+                            st.session_state.quiz = qj["quiz_data"]["questions"]
+                            st.session_state.quiz_subject = qj["subject"]
+                            st.session_state.quiz_topic = qj["topic"]
+                            st.session_state.quiz_difficulty = qj["difficulty"]
+                            st.session_state.quiz_answers = {}
+                            st.session_state.quiz_submitted = False
+                            st.session_state.quiz_score_details = None
+                            st.rerun()
+                st.markdown("---")
 
 
 # ==================================================
@@ -1263,7 +2019,7 @@ elif page == "Recommendations & Study Plan":
     total_weekly_minutes = 0
 
     if selected_days:
-        st.markdown("##### ⏱️ Daily Study Duration (Hours & Minutes)")
+        st.markdown("##### Daily Study Duration ")
         st.caption("Specify your available study time for each selected day.")
 
         minute_options = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
@@ -1382,9 +2138,9 @@ elif page == "Profile":
     st.subheader("Student Profile")
 
     profile = get_profile(user_id=user_id)
-    current_name = profile[0] if profile else ""
-    current_course = profile[1] if profile else ""
-    current_semester = profile[2] if profile else 1
+    current_name = profile[0] if (profile and profile[0]) else user_display
+    current_course = profile[1] if (profile and profile[1]) else user_course
+    current_semester = profile[2] if (profile and profile[2]) else user_semester
 
     with st.container():
         st.markdown('<div class="ui-card">', unsafe_allow_html=True)
@@ -1394,12 +2150,13 @@ elif page == "Profile":
 
         if st.button("Save Profile", type="primary"):
             if name.strip():
-                save_profile(name, course, semester, user_id=user_id)
+                save_profile(name.strip(), course.strip(), int(semester), user_id=user_id)
                 if st.session_state.user:
-                    st.session_state.user["name"] = name
-                    st.session_state.user["course"] = course
-                    st.session_state.user["semester"] = semester
+                    st.session_state.user["name"] = name.strip()
+                    st.session_state.user["course"] = course.strip()
+                    st.session_state.user["semester"] = int(semester)
                 st.success("Profile saved successfully.")
+                st.rerun()
             else:
                 st.warning("Please enter your name.")
         st.markdown('</div>', unsafe_allow_html=True)

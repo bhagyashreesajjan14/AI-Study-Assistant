@@ -7,3 +7,5 @@ pandas
 scikit-learn
 plotly
 reportlab
+rapidocr-onnxruntime
+python-docx

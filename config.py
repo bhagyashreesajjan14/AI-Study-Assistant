@@ -17,6 +17,10 @@ CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 TOP_K = 5
 
+# Upload & File Processing Configurations
+SUPPORTED_FILE_EXTENSIONS = ["pdf", "doc", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]
+MAX_UPLOAD_SIZE_MB = 25
+
 DATA_DIR.mkdir(exist_ok=True)
 NOTES_DIR.mkdir(exist_ok=True)
 VECTOR_DIR.mkdir(exist_ok=True)

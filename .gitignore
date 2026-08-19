@@ -1,8 +1,11 @@
 # Python virtual environments
 .venv/
+.venv*/
 venv/
 ENV/
 env/
+.env
+.env.*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

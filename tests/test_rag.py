@@ -108,10 +108,11 @@ def test_save_and_load_index(tmp_path):
     assert loaded_chunks[0]["text"] == "Sample text"
 
 
+@patch("rag.save_document_extracted_text")
 @patch("rag.update_job_status")
-@patch("rag.extract_pdf_pages")
+@patch("rag.extract_document_pages")
 @patch("rag.get_embeddings")
-def test_process_pdf_background(mock_get_emb, mock_extract, mock_update_status, tmp_path):
+def test_process_pdf_background(mock_get_emb, mock_extract, mock_update_status, mock_save_text, tmp_path):
     mock_extract.return_value = [{"text": "Sample DBMS content", "page": 1, "source": "dbms.pdf"}]
     mock_get_emb.side_effect = lambda texts: np.array([[1.0, 0.0, 0.0, 0.0] for _ in texts], dtype="float32")
 
@@ -129,6 +130,7 @@ def test_process_pdf_background(mock_get_emb, mock_extract, mock_update_status, 
     calls = [c[1]["status"] for c in mock_update_status.call_args_list]
     assert "processing" in calls
     assert "completed" in calls
+    assert mock_save_text.called
 
 
 @patch("rag.get_embeddings")
@@ -162,5 +164,55 @@ def test_search_user_notes_multi_document(mock_get_emb, tmp_path):
         res_doc = rag.search_user_notes("Memory", user_id=1, document_name="OS Notes.pdf")
         assert len(res_doc) == 1
         assert res_doc[0]["source"] == "OS Notes.pdf"
+
+
+def test_extract_plain_text(tmp_path):
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("Hello plain text study notes for DBMS.", encoding="utf-8")
+    extracted = rag.extract_plain_text(str(text_file))
+    assert "plain text study notes" in extracted
+
+
+def test_extract_docx_text(tmp_path):
+    import docx
+    docx_file = tmp_path / "test.docx"
+    doc = docx.Document()
+    doc.add_paragraph("Machine Learning algorithms and regression models.")
+    doc.save(str(docx_file))
+
+    extracted = rag.extract_docx_text(str(docx_file))
+    assert "Machine Learning algorithms" in extracted
+
+
+@patch("rag._ocr_engine")
+def test_extract_image_text_with_ocr(mock_ocr, tmp_path):
+    # Mock OCR engine response
+    mock_ocr.return_value = (
+        [[None, "Optical Character Recognition Test Text", 0.98]],
+        0.05
+    )
+    img_file = tmp_path / "diagram.png"
+    img_file.write_bytes(b"fake_image_bytes")
+
+    extracted = rag.extract_image_text(str(img_file))
+    assert "Optical Character Recognition" in extracted
+
+
+def test_extract_document_pages_dispatcher(tmp_path):
+    txt_file = tmp_path / "sample.md"
+    txt_file.write_text("# Chapter 1\nConcepts of Computer Networks.", encoding="utf-8")
+
+    pages = rag.extract_document_pages(str(txt_file))
+    assert len(pages) == 1
+    assert "Computer Networks" in pages[0]["text"]
+    assert pages[0]["source"] == "sample.md"
+
+
+def test_get_full_document_text(tmp_path):
+    txt_file = tmp_path / "summary.txt"
+    txt_file.write_text("Overview of Relational Databases and SQL.", encoding="utf-8")
+
+    full_text = rag.get_full_document_text(str(txt_file))
+    assert "Relational Databases" in full_text
 
 

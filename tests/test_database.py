@@ -196,3 +196,148 @@ def test_study_plans_user_isolation():
     latest_u1 = database.get_latest_study_plan(user_id=1)
     assert latest_u1["target_level"] == "Intermediate"
 
+
+def test_document_extracted_text_caching_and_retrieval():
+    doc_id, job_id = database.create_document_job(
+        user_id=1,
+        filename="lecture_slide.png",
+        file_path="/path/to/lecture_slide.png",
+        subject="machine_learning",
+        file_size=10240,
+        file_type="png"
+    )
+    assert doc_id > 0
+    assert job_id > 0
+
+    # Save extracted text
+    sample_text = "Supervised learning uses labeled training datasets."
+    database.save_document_extracted_text(doc_id, sample_text)
+
+    # Mark as completed
+    database.update_job_status(job_id, status="completed", progress=100)
+
+    # Fetch by ID with user isolation
+    doc = database.get_document_by_id(doc_id, user_id=1)
+    assert doc is not None
+    assert doc["filename"] == "lecture_slide.png"
+    assert doc["file_type"] == "png"
+    assert doc["extracted_text"] == sample_text
+
+    # Another user should not be able to fetch user 1's document
+    doc_user2 = database.get_document_by_id(doc_id, user_id=2)
+    assert doc_user2 is None
+
+    # Test get_latest_user_document
+    latest = database.get_latest_user_document(user_id=1)
+    assert latest is not None
+    assert latest["id"] == doc_id
+
+
+def test_full_user_flow_and_relogin(tmp_path):
+    import rag
+    import ai
+
+    # Step 1: Register user with exact registered name
+    reg_name = "Dr. Evelyn Reed"
+    ok, msg, user_data = database.register_user("evelyn", "securePass123", reg_name, "Data Science", 3)
+    assert ok is True
+    assert user_data["name"] == reg_name
+
+    # Step 2: Authenticate and retrieve profile
+    auth_ok, _, auth_data = database.authenticate_user("evelyn", "securePass123")
+    assert auth_ok is True
+    assert auth_data["name"] == reg_name
+
+    profile = database.get_profile(user_id=auth_data["id"])
+    assert profile[0] == reg_name
+    assert profile[1] == "Data Science"
+    assert profile[2] == 3
+
+    # Step 3: Multi-format file creation (TXT, MD)
+    notes_file = tmp_path / "Decision_Trees.txt"
+    notes_file.write_text("Decision trees recursively split dataset based on Gini impurity and information gain.", encoding="utf-8")
+
+    # Step 4: Create document job and extract text
+    doc_id, job_id = database.create_document_job(
+        user_id=auth_data["id"],
+        filename="Decision_Trees.txt",
+        file_path=str(notes_file),
+        subject="machine_learning",
+        file_size=len(notes_file.read_bytes()),
+        file_type="txt"
+    )
+    assert doc_id > 0
+    assert job_id > 0
+
+    extracted_content = rag.get_full_document_text(str(notes_file))
+    assert "Decision trees" in extracted_content
+    database.save_document_extracted_text(doc_id, extracted_content)
+    database.update_job_status(job_id, status="completed", progress=100)
+
+    # Step 5: Verify document is completed and available for Evelyn
+    docs = database.get_user_completed_documents(user_id=auth_data["id"])
+    assert len(docs) == 1
+    assert docs[0]["filename"] == "Decision_Trees.txt"
+    assert docs[0]["extracted_text"] == extracted_content
+
+    # Step 6: Verify User 2 cannot see Evelyn's document
+    docs_user2 = database.get_user_completed_documents(user_id=999)
+    assert len(docs_user2) == 0
+
+    # Step 7: Reuse the same extracted content across features
+    # Feature 7a: Quiz from material
+    with patch("ai.ollama.chat") as mock_chat:
+        mock_chat.return_value = {
+            "message": {
+                "content": '{"questions": [{"question": "What metric is used for tree splitting?", "options": ["Gini impurity", "Accuracy", "Recall", "F1"], "answer": 0, "explanation": "Gini is used."}]}'
+            }
+        }
+        quiz = ai.generate_quiz_from_material(docs[0]["extracted_text"], "machine_learning", "Intermediate", 1)
+        assert len(quiz["questions"]) == 1
+        assert quiz["questions"][0]["options"][0] == "Gini impurity"
+
+    # Feature 7b: Summary from the same material
+    with patch("ai.ollama.chat") as mock_chat:
+        mock_chat.return_value = {
+            "message": {"content": "**Core Summary**\nDecision trees split based on information gain."}
+        }
+        summary = ai.generate_summary(docs[0]["extracted_text"])
+        assert "Decision trees" in summary
+
+    # Feature 7c: Flashcards from the same material
+    with patch("ai.ollama.chat") as mock_chat:
+        mock_chat.return_value = {
+            "message": {
+                "content": '{"flashcards": [{"front": "Gini Impurity", "back": "A measure of purity for splits", "tag": "ML"}]}'
+            }
+        }
+        fcs = ai.generate_flashcards(docs[0]["extracted_text"], 1)
+        assert len(fcs) == 1
+        assert fcs[0]["front"] == "Gini Impurity"
+
+    # Step 8: Save quiz results and verify performance
+    database.save_quiz_result(
+        subject="machine_learning",
+        topic="Material: Decision_Trees.txt",
+        difficulty="Intermediate",
+        score=100.0,
+        total_questions=1,
+        correct_answers=1,
+        answers=[{"question": "Q1", "selected_answer": "Gini", "correct_answer": "Gini", "is_correct": 1}],
+        user_id=auth_data["id"]
+    )
+
+    perf = database.get_topic_performance(user_id=auth_data["id"])
+    assert len(perf) == 1
+    assert perf[0][0] == "machine_learning"
+    assert perf[0][1] == "Material: Decision_Trees.txt"
+
+    # Step 9: Re-login simulation - retrieve profile and documents
+    re_auth_ok, _, re_user = database.authenticate_user("evelyn", "securePass123")
+    assert re_auth_ok is True
+    re_profile = database.get_profile(user_id=re_user["id"])
+    assert re_profile[0] == reg_name
+    re_docs = database.get_user_completed_documents(user_id=re_user["id"])
+    assert len(re_docs) == 1
+    assert re_docs[0]["filename"] == "Decision_Trees.txt"
+

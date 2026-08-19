@@ -178,6 +178,43 @@ def init_database():
         )
     """)
 
+    # Multiple Notes Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            subject TEXT NOT NULL DEFAULT 'General',
+            associated_files TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Persistent Background Quiz Jobs Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quiz_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            number_of_questions INTEGER NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id INTEGER,
+            source_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            progress INTEGER NOT NULL DEFAULT 0,
+            quiz_data TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
     # --------------------------------------------------
     # SAFE SCHEMA MIGRATIONS FOR EXISTING DATABASES
     # --------------------------------------------------
@@ -186,6 +223,8 @@ def init_database():
     _migrate_table_add_column(cursor, "quiz_answers", "user_id", "INTEGER DEFAULT 1")
     _migrate_table_add_column(cursor, "chat_sessions", "user_id", "INTEGER DEFAULT 1")
     _migrate_table_add_column(cursor, "chat_messages", "user_id", "INTEGER DEFAULT 1")
+    _migrate_table_add_column(cursor, "documents", "file_type", "TEXT DEFAULT 'pdf'")
+    _migrate_table_add_column(cursor, "documents", "extracted_text", "TEXT DEFAULT ''")
 
     # Set default user_id = 1 for any legacy records where user_id is null
     for table in ["student_profile", "quiz_attempts", "quiz_answers", "chat_sessions", "chat_messages"]:
@@ -372,16 +411,23 @@ def get_profile(user_id: int = 1) -> Optional[Tuple[str, str, int]]:
 # DOCUMENTS & BACKGROUND JOBS
 # --------------------------------------------------
 
-def create_document_job(user_id: int, filename: str, file_path: str, subject: str, file_size: int = 0) -> Tuple[int, int]:
+def create_document_job(
+    user_id: int,
+    filename: str,
+    file_path: str,
+    subject: str,
+    file_size: int = 0,
+    file_type: str = "pdf"
+) -> Tuple[int, int]:
     """Creates persistent document and background job records."""
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
 
     cursor.execute("""
-        INSERT INTO documents (user_id, filename, file_path, subject, status, file_size, created_at)
-        VALUES (?, ?, ?, ?, 'processing', ?, ?)
-    """, (user_id, filename, file_path, subject, file_size, now))
+        INSERT INTO documents (user_id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at)
+        VALUES (?, ?, ?, ?, 'processing', ?, ?, '', ?)
+    """, (user_id, filename, file_path, subject, file_size, file_type, now))
     doc_id = cursor.lastrowid
 
     cursor.execute("""
@@ -393,6 +439,19 @@ def create_document_job(user_id: int, filename: str, file_path: str, subject: st
     conn.commit()
     conn.close()
     return doc_id, job_id
+
+
+def save_document_extracted_text(doc_id: int, extracted_text: str):
+    """Saves cached extracted text for a document."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE documents
+        SET extracted_text = ?
+        WHERE id = ?
+    """, (extracted_text, doc_id))
+    conn.commit()
+    conn.close()
 
 
 def update_job_status(job_id: int, status: str, progress: Optional[int] = None, error_message: Optional[str] = None):
@@ -470,14 +529,14 @@ def get_user_documents(user_id: int, subject: Optional[str] = None) -> List[Dict
     cursor = conn.cursor()
     if subject:
         cursor.execute("""
-            SELECT id, filename, file_path, subject, status, file_size, created_at
+            SELECT id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
             FROM documents
             WHERE user_id = ? AND subject = ?
             ORDER BY created_at DESC
         """, (user_id, subject))
     else:
         cursor.execute("""
-            SELECT id, filename, file_path, subject, status, file_size, created_at
+            SELECT id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
             FROM documents
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -494,7 +553,9 @@ def get_user_documents(user_id: int, subject: Optional[str] = None) -> List[Dict
             "subject": r[3],
             "status": r[4],
             "file_size": r[5],
-            "created_at": r[6]
+            "file_type": r[6] if len(r) > 6 else "pdf",
+            "extracted_text": r[7] if len(r) > 7 else "",
+            "created_at": r[8] if len(r) > 8 else r[6]
         })
     return docs
 
@@ -505,14 +566,14 @@ def get_user_completed_documents(user_id: int, subject: Optional[str] = None) ->
     cursor = conn.cursor()
     if subject and subject not in ("General", "All my completed notes"):
         cursor.execute("""
-            SELECT id, filename, file_path, subject, status, file_size, created_at
+            SELECT id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
             FROM documents
             WHERE user_id = ? AND subject = ? AND status = 'completed'
             ORDER BY created_at DESC
         """, (user_id, subject))
     else:
         cursor.execute("""
-            SELECT id, filename, file_path, subject, status, file_size, created_at
+            SELECT id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
             FROM documents
             WHERE user_id = ? AND status = 'completed'
             ORDER BY created_at DESC
@@ -527,8 +588,82 @@ def get_user_completed_documents(user_id: int, subject: Optional[str] = None) ->
         "subject": r[3],
         "status": r[4],
         "file_size": r[5],
-        "created_at": r[6]
+        "file_type": r[6] if len(r) > 6 else "pdf",
+        "extracted_text": r[7] if len(r) > 7 else "",
+        "created_at": r[8] if len(r) > 8 else r[6]
     } for r in rows]
+
+
+def get_document_by_id(doc_id: int, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Fetches a specific document record by ID, optionally isolated by user_id."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if user_id is not None:
+        cursor.execute("""
+            SELECT id, user_id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
+            FROM documents
+            WHERE id = ? AND user_id = ?
+        """, (doc_id, user_id))
+    else:
+        cursor.execute("""
+            SELECT id, user_id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
+            FROM documents
+            WHERE id = ?
+        """, (doc_id,))
+    r = cursor.fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {
+        "id": r[0],
+        "user_id": r[1],
+        "filename": r[2],
+        "file_path": r[3],
+        "subject": r[4],
+        "status": r[5],
+        "file_size": r[6],
+        "file_type": r[7] if len(r) > 7 else "pdf",
+        "extracted_text": r[8] if len(r) > 8 else "",
+        "created_at": r[9] if len(r) > 9 else ""
+    }
+
+
+def get_latest_user_document(user_id: int, subject: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Fetches the latest document uploaded by the user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if subject and subject not in ("General", "All my completed notes"):
+        cursor.execute("""
+            SELECT id, user_id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
+            FROM documents
+            WHERE user_id = ? AND subject = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (user_id, subject))
+    else:
+        cursor.execute("""
+            SELECT id, user_id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
+            FROM documents
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (user_id,))
+    r = cursor.fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {
+        "id": r[0],
+        "user_id": r[1],
+        "filename": r[2],
+        "file_path": r[3],
+        "subject": r[4],
+        "status": r[5],
+        "file_size": r[6],
+        "file_type": r[7] if len(r) > 7 else "pdf",
+        "extracted_text": r[8] if len(r) > 8 else "",
+        "created_at": r[9] if len(r) > 9 else ""
+    }
 
 
 def check_duplicate_document(user_id: int, filename: str, subject: str) -> Optional[Dict[str, Any]]:
@@ -536,7 +671,7 @@ def check_duplicate_document(user_id: int, filename: str, subject: str) -> Optio
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, filename, file_path, subject, status, file_size, created_at
+        SELECT id, filename, file_path, subject, status, file_size, file_type, extracted_text, created_at
         FROM documents
         WHERE user_id = ? AND filename = ? AND subject = ?
         ORDER BY id DESC
@@ -553,7 +688,9 @@ def check_duplicate_document(user_id: int, filename: str, subject: str) -> Optio
         "subject": r[3],
         "status": r[4],
         "file_size": r[5],
-        "created_at": r[6]
+        "file_type": r[6] if len(r) > 6 else "pdf",
+        "extracted_text": r[7] if len(r) > 7 else "",
+        "created_at": r[8] if len(r) > 8 else ""
     }
 
 
@@ -913,3 +1050,309 @@ def get_user_study_plans(user_id: int) -> List[Dict[str, Any]]:
         "plan_content": r[4],
         "created_at": r[5]
     } for r in rows]
+
+
+# --------------------------------------------------
+# MULTIPLE PERSISTENT NOTES MANAGEMENT
+# --------------------------------------------------
+
+def create_note(
+    user_id: int,
+    title: str,
+    content: str,
+    subject: str = "General",
+    associated_files: Optional[List[str]] = None
+) -> int:
+    """Creates a new note for a user without overwriting existing notes."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().isoformat()
+    files_json = json.dumps(associated_files or [])
+    cursor.execute("""
+        INSERT INTO notes (user_id, title, content, subject, associated_files, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, title.strip() or "Untitled Note", content, subject, files_json, now_str, now_str))
+    note_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return note_id
+
+
+def update_note(
+    note_id: int,
+    user_id: int,
+    title: str,
+    content: str,
+    subject: str = "General",
+    associated_files: Optional[List[str]] = None
+) -> bool:
+    """Updates an existing note for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().isoformat()
+    files_json = json.dumps(associated_files or [])
+    cursor.execute("""
+        UPDATE notes
+        SET title = ?, content = ?, subject = ?, associated_files = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?
+    """, (title.strip() or "Untitled Note", content, subject, files_json, now_str, note_id, user_id))
+    affected = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def delete_note(note_id: int, user_id: int) -> bool:
+    """Deletes a note for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM notes WHERE id = ? AND user_id = ?", (note_id, user_id))
+    affected = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def get_user_notes(user_id: int, subject: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieves all notes for a specific user, optionally filtered by subject."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if subject and subject != "All Subjects" and subject != "General":
+        cursor.execute("""
+            SELECT id, user_id, title, content, subject, associated_files, created_at, updated_at
+            FROM notes
+            WHERE user_id = ? AND subject = ?
+            ORDER BY updated_at DESC, id DESC
+        """, (user_id, subject))
+    else:
+        cursor.execute("""
+            SELECT id, user_id, title, content, subject, associated_files, created_at, updated_at
+            FROM notes
+            WHERE user_id = ?
+            ORDER BY updated_at DESC, id DESC
+        """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    notes = []
+    for r in rows:
+        files = []
+        if r[5]:
+            try:
+                files = json.loads(r[5])
+            except Exception:
+                files = []
+        notes.append({
+            "id": r[0],
+            "user_id": r[1],
+            "title": r[2],
+            "content": r[3],
+            "subject": r[4],
+            "associated_files": files,
+            "created_at": r[6],
+            "updated_at": r[7]
+        })
+    return notes
+
+
+def get_note_by_id(note_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves a single note by ID for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, title, content, subject, associated_files, created_at, updated_at
+        FROM notes
+        WHERE id = ? AND user_id = ?
+    """, (note_id, user_id))
+    r = cursor.fetchone()
+    conn.close()
+    if not r:
+        return None
+    files = []
+    if r[5]:
+        try:
+            files = json.loads(r[5])
+        except Exception:
+            files = []
+    return {
+        "id": r[0],
+        "user_id": r[1],
+        "title": r[2],
+        "content": r[3],
+        "subject": r[4],
+        "associated_files": files,
+        "created_at": r[6],
+        "updated_at": r[7]
+    }
+
+
+# --------------------------------------------------
+# PERSISTENT BACKGROUND QUIZ JOBS
+# --------------------------------------------------
+
+def create_quiz_job(
+    user_id: int,
+    subject: str,
+    topic: str,
+    difficulty: str,
+    number_of_questions: int,
+    source_type: str = "topic",
+    source_id: Optional[int] = None,
+    source_name: Optional[str] = None
+) -> int:
+    """Creates a persistent background quiz generation job record."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO quiz_jobs (
+            user_id, subject, topic, difficulty, number_of_questions,
+            source_type, source_id, source_name, status, progress,
+            error_message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?)
+    """, (
+        user_id, subject, topic, difficulty, number_of_questions,
+        source_type, source_id, source_name or topic, now_str
+    ))
+    job_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return job_id
+
+
+def update_quiz_job_status(
+    job_id: int,
+    status: str,
+    progress: int = 0,
+    quiz_data: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None
+):
+    """Updates the status, progress, questions, or error of a quiz generation job."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().isoformat()
+    quiz_json = json.dumps(quiz_data) if quiz_data is not None else None
+
+    if status == "completed":
+        cursor.execute("""
+            UPDATE quiz_jobs
+            SET status = ?, progress = 100, quiz_data = COALESCE(?, quiz_data),
+                error_message = NULL, completed_at = ?
+            WHERE id = ?
+        """, (status, quiz_json, now_str, job_id))
+    elif status == "failed":
+        cursor.execute("""
+            UPDATE quiz_jobs
+            SET status = ?, progress = ?, error_message = ?, completed_at = ?
+            WHERE id = ?
+        """, (status, progress, error_message, now_str, job_id))
+    else:
+        cursor.execute("""
+            UPDATE quiz_jobs
+            SET status = ?, progress = ?, quiz_data = COALESCE(?, quiz_data)
+            WHERE id = ?
+        """, (status, progress, quiz_json, job_id))
+
+    conn.commit()
+    conn.close()
+
+
+def get_user_quiz_jobs(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Retrieves all quiz generation jobs for a specific user ordered by latest."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, subject, topic, difficulty, number_of_questions,
+               source_type, source_id, source_name, status, progress,
+               quiz_data, error_message, created_at, completed_at
+        FROM quiz_jobs
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+    """, (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+
+    jobs = []
+    for r in rows:
+        data = None
+        if r[11]:
+            try:
+                data = json.loads(r[11])
+            except Exception:
+                data = None
+        jobs.append({
+            "id": r[0],
+            "user_id": r[1],
+            "subject": r[2],
+            "topic": r[3],
+            "difficulty": r[4],
+            "number_of_questions": r[5],
+            "source_type": r[6],
+            "source_id": r[7],
+            "source_name": r[8],
+            "status": r[9],
+            "progress": r[10],
+            "quiz_data": data,
+            "error_message": r[12],
+            "created_at": r[13],
+            "completed_at": r[14]
+        })
+    return jobs
+
+
+def get_quiz_job_by_id(job_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves a single quiz job by ID for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, subject, topic, difficulty, number_of_questions,
+               source_type, source_id, source_name, status, progress,
+               quiz_data, error_message, created_at, completed_at
+        FROM quiz_jobs
+        WHERE id = ? AND user_id = ?
+    """, (job_id, user_id))
+    r = cursor.fetchone()
+    conn.close()
+    if not r:
+        return None
+    data = None
+    if r[11]:
+        try:
+            data = json.loads(r[11])
+        except Exception:
+            data = None
+    return {
+        "id": r[0],
+        "user_id": r[1],
+        "subject": r[2],
+        "topic": r[3],
+        "difficulty": r[4],
+        "number_of_questions": r[5],
+        "source_type": r[6],
+        "source_id": r[7],
+        "source_name": r[8],
+        "status": r[9],
+        "progress": r[10],
+        "quiz_data": data,
+        "error_message": r[12],
+        "created_at": r[13],
+        "completed_at": r[14]
+    }
+
+
+def get_latest_quiz_job(user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves the most recent quiz generation job for a user."""
+    jobs = get_user_quiz_jobs(user_id, limit=1)
+    return jobs[0] if jobs else None
+
+
+def delete_quiz_job(job_id: int, user_id: int) -> bool:
+    """Deletes a quiz job record."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM quiz_jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
+    affected = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return affected
