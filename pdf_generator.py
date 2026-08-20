@@ -42,9 +42,15 @@ def _escape_xml(text: str) -> str:
 
 
 def _convert_inline_markdown(text: str) -> str:
-    """Converts bold, italic, and inline code markdown into ReportLab XML formatting."""
-    # First escape special XML characters
+    """Converts bold, italic, line breaks, and inline code markdown into ReportLab XML formatting."""
+    # Standardize all variations of <br>, <br/>, <br />
+    text = re.sub(r'<\s*br\s*/?\s*>', '___BR_TOKEN___', text, flags=re.IGNORECASE)
+    # Strip any stray opening/closing tags that ReportLab doesn't support or unclosed tags
+    text = re.sub(r'<\s*/?\s*(?:p|div|span|strong|em|para)\s*>', '', text, flags=re.IGNORECASE)
+    # Escape special XML characters
     text = _escape_xml(text)
+    # Restore safe self-closing <br/> for ReportLab
+    text = text.replace('___BR_TOKEN___', '<br/>')
     # Bold **text** or __text__
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
@@ -124,20 +130,20 @@ def _markdown_to_flowables(markdown_text: str, styles: Any) -> List[Any]:
         # Handle code blocks ```
         if stripped.startswith('```'):
             if in_code_block:
-                code_text = "\n".join(code_block_lines)
-                code_p = Paragraph(_escape_xml(code_text).replace('\n', '<br/>'), code_style)
-                code_table = Table([[code_p]], colWidths=[6.8 * inch])
-                code_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f1f5f9')),
-                    ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e1')),
-                    ('TOPPADDING', (0, 0), (-1, -1), 5),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                    ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                ]))
-                flowables.append(Spacer(1, 3))
-                flowables.append(code_table)
-                flowables.append(Spacer(1, 4))
+                if code_block_lines:
+                    code_rows = [[Paragraph(_escape_xml(cl) or '&nbsp;', code_style)] for cl in code_block_lines]
+                    code_table = Table(code_rows, colWidths=[6.8 * inch])
+                    code_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f1f5f9')),
+                        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e1')),
+                        ('TOPPADDING', (0, 0), (-1, -1), 1),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                    ]))
+                    flowables.append(Spacer(1, 3))
+                    flowables.append(code_table)
+                    flowables.append(Spacer(1, 4))
                 code_block_lines = []
                 in_code_block = False
             else:
@@ -433,35 +439,36 @@ def generate_chat_pdf(
     for idx, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
-        
-        if role == "user":
-            story.append(Paragraph(f"👤 <b>{_escape_xml(student_name)}</b>", user_bubble_header))
-            user_flowables = _markdown_to_flowables(content, styles)
-            user_table = Table([[user_flowables]], colWidths=[6.8 * inch])
-            user_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#eff6ff')),
-                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#bfdbfe')),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                ('LEFTPADDING', (0, 0), (-1, -1), 7),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ]))
-            story.append(user_table)
-        else:
-            story.append(Paragraph("🤖 <b>AI Tutor</b>", assistant_bubble_header))
-            assistant_flowables = _markdown_to_flowables(content, styles)
-            asst_table = Table([[assistant_flowables]], colWidths=[6.8 * inch])
-            asst_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8fafc')),
-                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                ('LEFTPADDING', (0, 0), (-1, -1), 7),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ]))
-            story.append(asst_table)
 
-        story.append(Spacer(1, 6))
+        if role == "user":
+            story.append(Spacer(1, 4))
+            story.append(Paragraph(f"👤 <b>{_escape_xml(student_name)}</b>", user_bubble_header))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#bfdbfe'), spaceBefore=2, spaceAfter=4))
+            user_flowables = _markdown_to_flowables(content, styles)
+            story.extend(user_flowables)
+            story.append(Spacer(1, 6))
+        else:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("🤖 <b>AI Tutor</b>", assistant_bubble_header))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#6ee7b7'), spaceBefore=2, spaceAfter=4))
+            assistant_flowables = _markdown_to_flowables(content, styles)
+            story.extend(assistant_flowables)
+            story.append(Spacer(1, 6))
+
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#e2e8f0'), spaceBefore=2, spaceAfter=6))
+
+    # Footer disclaimer
+    story.append(Spacer(1, 8))
+    footer_style = ParagraphStyle(
+        'ChatFooter',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor('#94a3b8'),
+        alignment=1
+    )
+    story.append(Paragraph("AI Study Assistant &bull; Educational Chat Transcript", footer_style))
 
     doc.build(story)
     pdf_bytes = buffer.getvalue()

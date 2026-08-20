@@ -1,6 +1,6 @@
 import io
 from typing import List, Dict, Any, Optional
-import ollama
+from groq import Groq
 
 try:
     from reportlab.lib import colors
@@ -12,7 +12,15 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
-from config import LLM_MODEL
+from config import LLM_MODEL, get_groq_api_key
+
+
+def get_groq_client() -> Groq:
+    """Returns a Groq API client configured with the API key."""
+    api_key = get_groq_api_key()
+    return Groq(api_key=api_key or "PASTE_YOUR_GROQ_API_KEY_HERE")
+
+
 
 
 def format_duration(hours: int, minutes: int) -> str:
@@ -77,7 +85,8 @@ CRITICAL RULES:
 4. Keep the output clean, highly organized, and structured in Markdown format.
 """
 
-    response = ollama.chat(
+    client = get_groq_client()
+    response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {
@@ -87,7 +96,8 @@ CRITICAL RULES:
         ]
     )
 
-    return response["message"]["content"]
+    return response.choices[0].message.content or ""
+
 
 
 def generate_study_plan_pdf(
@@ -237,35 +247,20 @@ def generate_study_plan_pdf(
     story.append(Paragraph("Structured Daily Study Schedule", section_header_style))
     story.append(HRFlowable(width="100%", thickness=0.75, color=colors.HexColor('#cbd5e1'), spaceBefore=2, spaceAfter=8))
 
-    # Parse and format the markdown plan lines into PDF paragraphs
-    plan_lines = plan_content.split("\n")
-    for line in plan_lines:
-        line_clean = line.strip()
-        if not line_clean:
-            story.append(Spacer(1, 4))
-            continue
-
-        if line_clean.startswith("#"):
-            heading_text = line_clean.lstrip("#").strip()
-            story.append(Paragraph(f"<b>{heading_text}</b>", ParagraphStyle(
-                'DayHeading',
-                parent=styles['Normal'],
-                fontName='Helvetica-Bold',
-                fontSize=11,
-                leading=14,
-                textColor=colors.HexColor('#1e293b'),
-                spaceBefore=6,
-                spaceAfter=2
-            )))
-        elif line_clean.startswith("- ") or line_clean.startswith("* "):
-            bullet_text = line_clean[2:].strip()
-            # Replace bold markdown with html bold
-            bullet_text = bullet_text.replace("**", "<b>", 1)
-            bullet_text = bullet_text.replace("**", "</b>", 1)
-            story.append(Paragraph(f"&bull; {bullet_text}", body_style))
-        else:
-            text = line_clean.replace("**", "<b>", 1).replace("**", "</b>", 1)
-            story.append(Paragraph(text, body_style))
+    # Parse and format the markdown plan lines into robust PDF flowables (tables, lists, headers, clean XML)
+    try:
+        from pdf_generator import _markdown_to_flowables
+        plan_flowables = _markdown_to_flowables(plan_content, styles)
+        story.extend(plan_flowables)
+    except Exception:
+        # Fallback to safe plain text paragraphs if custom parser encounters any unexpected syntax
+        for line in plan_content.split("\n"):
+            line_clean = line.strip()
+            if not line_clean:
+                story.append(Spacer(1, 4))
+            else:
+                from pdf_generator import _escape_xml
+                story.append(Paragraph(_escape_xml(line_clean), body_style))
 
     doc.build(story)
     pdf_bytes = buffer.getvalue()

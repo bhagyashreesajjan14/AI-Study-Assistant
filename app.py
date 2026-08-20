@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import time
 
 from config import (
     NOTES_DIR,
@@ -48,7 +49,8 @@ from database import (
     get_user_quiz_jobs,
     get_quiz_job_by_id,
     get_latest_quiz_job,
-    delete_quiz_job
+    delete_quiz_job,
+    delete_user_document
 )
 
 from ai import (
@@ -61,7 +63,8 @@ from ai import (
     generate_flashcards,
     generate_notes_explanation,
     explain_mistake,
-    start_background_quiz_generation
+    start_background_quiz_generation,
+    fix_mermaid_syntax
 )
 
 from rag import (
@@ -73,7 +76,8 @@ from rag import (
     load_index,
     start_background_indexing,
     load_user_subject_index,
-    get_full_document_text
+    get_full_document_text,
+    delete_document_data
 )
 
 from quiz import (
@@ -151,7 +155,9 @@ defaults = {
     "active_card_idx": 0,
     "show_card_back": False,
     "active_note_id": None,
-    "note_search_query": ""
+    "note_search_query": "",
+    "material_uploader_version": 0,
+    "pending_delete_doc_id": None
 }
 
 for key, value in defaults.items():
@@ -172,7 +178,6 @@ html, body, [class*="css"], .stApp {
     color: #1e293b;
 }
 
-/* Minimalist Brand Bar */
 .app-brand-bar {
     display: flex;
     align-items: center;
@@ -205,7 +210,6 @@ html, body, [class*="css"], .stApp {
     border: 1px solid #cbd5e1;
 }
 
-/* Compact Centered Auth Container */
 .auth-wrapper {
     display: flex;
     justify-content: center;
@@ -243,7 +247,6 @@ html, body, [class*="css"], .stApp {
     margin: 0;
 }
 
-/* Modern Card */
 .ui-card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -267,7 +270,6 @@ html, body, [class*="css"], .stApp {
     margin: 0;
 }
 
-/* Metric Cards */
 div[data-testid="stMetric"] {
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -291,7 +293,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     color: #0f172a !important;
 }
 
-/* ChatGPT Welcome Container */
 .welcome-container {
     text-align: center;
     padding: 2.5rem 1rem 1.5rem 1rem;
@@ -314,7 +315,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     margin-bottom: 2rem;
 }
 
-/* Status Badges */
 .badge-queued {
     background: #f1f5f9;
     color: #475569;
@@ -375,7 +375,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-size: 0.85rem;
 }
 
-/* Citations */
 .citation-card {
     background: #f8fafc;
     border: 1px solid #e2e8f0;
@@ -392,7 +391,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     margin-bottom: 4px;
 }
 
-/* Disclaimer */
 .chat-disclaimer {
     text-align: center;
     font-size: 0.75rem;
@@ -400,7 +398,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     margin-top: 0.75rem;
 }
 
-/* Flashcard Styles */
 .flashcard-box {
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -455,7 +452,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     margin-bottom: 1.2rem;
 }
 
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
     html, body, [class*="css"], .stApp {
         color: #f1f5f9;
@@ -487,7 +483,7 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 
 
 # ==================================================
-# REQUIREMENT 1: COMPACT, CENTERED LOGIN & SIGNUP SCREEN
+# 1. AUTHENTICATION (LOGIN & SIGNUP)
 # ==================================================
 
 if not st.session_state.authenticated:
@@ -546,13 +542,12 @@ if not st.session_state.authenticated:
 
 
 # ==================================================
-# AUTHENTICATED APP SHELL & ISOLATION
+# APP SHELL & ISOLATION
 # ==================================================
 
 current_user = st.session_state.user or {}
 user_id = current_user.get("id", 1)
 
-# Retrieve profile to guarantee the exact registered name is used consistently
 profile_record = get_profile(user_id=user_id)
 if profile_record and profile_record[0]:
     user_display = profile_record[0]
@@ -563,7 +558,6 @@ else:
     user_course = current_user.get("course", "")
     user_semester = current_user.get("semester", 1)
 
-# Top Brand Bar
 badge_text = f"{user_display} &bull; {user_course}" if user_course else user_display
 st.markdown(f"""
 <div class="app-brand-bar">
@@ -576,12 +570,8 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-
-# Dynamic Subject Fetcher
 available_subjects = get_all_subjects()
 
-
-# Sidebar Navigation
 page = st.sidebar.radio(
     "Navigation",
     [
@@ -595,7 +585,6 @@ page = st.sidebar.radio(
     ]
 )
 
-# User session info & Sign Out button in sidebar
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Logged in as **{user_display}** (`@{current_user.get('username', '')}`)")
 if st.sidebar.button("Sign Out", use_container_width=True):
@@ -606,7 +595,7 @@ if st.sidebar.button("Sign Out", use_container_width=True):
 
 
 # ==================================================
-# REQUIREMENT 3: AI TUTOR (NOTES ONLY CHECKBOX & DOCUMENT SELECTOR)
+# AI TUTOR
 # ==================================================
 
 if page == "AI Tutor":
@@ -648,25 +637,15 @@ if page == "AI Tutor":
         col_chat, col_del = st.sidebar.columns([0.84, 0.16])
         is_active = (st.session_state.active_chat_id == chat["id"])
 
-        btn_label = chat["title"]
-        if is_active:
-            btn_label = f"• {chat['title']}"
+        btn_label = f"• {chat['title']}" if is_active else chat["title"]
 
         with col_chat:
-            if st.button(
-                btn_label,
-                key=f"chat_btn_{chat['id']}",
-                use_container_width=True
-            ):
+            if st.button(btn_label, key=f"chat_btn_{chat['id']}", use_container_width=True):
                 st.session_state.active_chat_id = chat["id"]
                 st.rerun()
 
         with col_del:
-            if st.button(
-                "x",
-                key=f"chat_del_{chat['id']}",
-                help="Delete Chat"
-            ):
+            if st.button("x", key=f"chat_del_{chat['id']}", help="Delete Chat"):
                 delete_chat_session(chat["id"], user_id=user_id)
                 if st.session_state.active_chat_id == chat["id"]:
                     st.session_state.active_chat_id = None
@@ -677,30 +656,25 @@ if page == "AI Tutor":
     if active_chat_id is not None:
         messages = get_chat_messages(active_chat_id, user_id=user_id)
 
-        # Controls Row & Full Chat Export
         ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([0.25, 0.25, 0.25, 0.25])
         with ctrl_col1:
             mode = st.selectbox(
                 "Tutor Mode",
-                [
-                    "Explain",
-                    "Simple Explanation",
-                    "Example",
-                    "Exam Preparation"
-                ],
+                ["Explain", "Simple Explanation", "Example", "Exam Preparation"],
                 key="tutor_mode"
             )
         with ctrl_col2:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            notes_only = st.checkbox(
-                "Reference uploaded notes only",
-                value=False,
-                key="tutor_notes_only"
-            )
+            notes_only = st.checkbox("Reference uploaded notes only", value=False, key="tutor_notes_only")
         with ctrl_col3:
             if notes_only:
                 completed_docs = get_user_completed_documents(user_id)
                 doc_options = ["All my completed notes"] + [d["filename"] for d in completed_docs]
+                
+                # Check valid selection string
+                if "tutor_ref_doc" in st.session_state and st.session_state.tutor_ref_doc not in doc_options:
+                    del st.session_state["tutor_ref_doc"]
+                
                 selected_ref_doc = st.selectbox("Reference Document", doc_options, key="tutor_ref_doc")
             else:
                 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
@@ -732,7 +706,6 @@ if page == "AI Tutor":
 
         st.markdown("---")
 
-        # Empty State Welcome & Prompt Suggestions
         if len(messages) == 0:
             st.markdown("""
             <div class="welcome-container">
@@ -758,18 +731,15 @@ if page == "AI Tutor":
                     st.session_state.pending_prompt = "Provide a comprehensive summary of the core concepts in this subject."
                     st.rerun()
 
-        # Render Chat History
         for msg_idx, msg in enumerate(messages):
             role = msg["role"]
             with st.chat_message(role):
-                st.markdown(msg["content"])
+                st.markdown(fix_mermaid_syntax(msg["content"]))
                 
                 if role == "assistant":
-                    # Action row below AI response: Copy and Real PDF Download
                     act_c1, act_c2 = st.columns([0.72, 0.28])
                     with act_c2:
                         try:
-                            # Generate dynamic real PDF from this exact response
                             response_title = f"{format_subject(chat_subject)} Study Notes"
                             if msg_idx > 0 and messages[msg_idx - 1]["role"] == "user":
                                 response_title = messages[msg_idx - 1]["content"][:40]
@@ -786,7 +756,7 @@ if page == "AI Tutor":
                                 data=single_pdf_bytes,
                                 file_name=pdf_fname,
                                 mime="application/pdf",
-                                key=f"dl_resp_pdf_{msg['id']}",
+                                key=f"dl_resp_pdf_{msg.get('id', msg_idx)}",
                                 use_container_width=True
                             )
                         except Exception:
@@ -855,7 +825,6 @@ if page == "AI Tutor":
                 })
 
                 try:
-                    # GPT-Style Streaming Token Output
                     stream_gen = ask_ai_chat_stream(
                         messages=full_history,
                         context=context,
@@ -874,13 +843,13 @@ if page == "AI Tutor":
                                 </div>
                                 """, unsafe_allow_html=True)
 
-                    save_chat_message(active_chat_id, "assistant", full_answer, sources=sources, user_id=user_id)
+                    save_chat_message(active_chat_id, "assistant", fix_mermaid_syntax(full_answer), sources=sources, user_id=user_id)
 
                     if len(messages) == 0:
                         new_title = prompt[:30] + "..." if len(prompt) > 30 else prompt
                         rename_chat_session(active_chat_id, new_title, user_id=user_id)
 
-                    st.rerun()
+                    # Smooth finish without jarring rerun
                 except Exception as e:
                     st.error(f"Response generation error: {e}")
 
@@ -933,7 +902,6 @@ elif page == "Dashboard":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Active Background Tasks summary (Document Indexing & Quiz Generation)
     user_jobs = get_user_document_jobs(user_id=user_id)
     active_doc_jobs = [j for j in user_jobs if j["status"] in ("queued", "processing")]
     user_quiz_jobs = get_user_quiz_jobs(user_id=user_id)
@@ -955,6 +923,9 @@ elif page == "Dashboard":
             st.write(f"🎯 **Quiz Generation:** {qjob['topic']} ({qjob['difficulty']}) — {qjob['status'].upper()} ({qjob['progress']}%)")
             st.progress(qjob["progress"] / 100.0)
 
+        time.sleep(2)
+        st.rerun()
+
     if not df.empty:
         st.markdown("""
         <div class="ui-card">
@@ -970,26 +941,23 @@ elif page == "Dashboard":
 
 
 # ==================================================
-# REQUIREMENT 2 & 3: STUDY MATERIAL, MULTI-NOTES & OCR
+# STUDY MATERIAL & MULTI-NOTES STUDIO
 # ==================================================
 
 elif page == "Study Material":
     st.subheader("Study Material & Multi-Notes Studio")
-    st.caption("Create unlimited persistent notes, upload learning materials across all formats (PDF, DOC, DOCX, Screenshots/Images with OCR), and use them seamlessly.")
+    st.caption("Create unlimited persistent notes, upload learning materials across all formats, and use them seamlessly.")
 
     tab_library, tab_notes_studio = st.tabs([
         "📚 Uploaded Materials & Learning Hub",
         "📝 Multi-Notes Studio"
     ])
 
-    # --------------------------------------------------
-    # TAB 1: UPLOADED MATERIALS & OCR LEARNING HUB
-    # --------------------------------------------------
     with tab_library:
         st.markdown("""
         <div class="ui-card">
             <h4 class="ui-card-title">📤 Upload New Learning Material</h4>
-            <p class="ui-card-subtitle">Supported formats: PDF (with scanned OCR fallback), Word DOCX, DOC, Images (PNG, JPG, JPEG, WEBP with OCR), Plaintext, and Markdown (Max 25MB).</p>
+            <p class="ui-card-subtitle">Supported formats: PDF (with OCR fallback), Word DOCX, DOC, Images (PNG, JPG, WEBP), Plaintext, Markdown (Max 25MB).</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1014,11 +982,12 @@ elif page == "Study Material":
                     else:
                         st.warning("Please enter a subject name.")
 
+        uploader_version = st.session_state.get("material_uploader_version", 0)
         uploaded_file = st.file_uploader(
             "Choose Document or Screenshot/Image File",
             type=SUPPORTED_FILE_EXTENSIONS,
-            key="multi_material_uploader",
-            help=f"Upload PDF documents, scanned lecture slides/diagrams (PNG/JPG/WEBP), Word docs (DOC/DOCX), or notes (Max {MAX_UPLOAD_SIZE_MB}MB)."
+            key=f"multi_material_uploader_{uploader_version}",
+            help=f"Upload PDF documents, slides, images, or notes (Max {MAX_UPLOAD_SIZE_MB}MB)."
         )
 
         if uploaded_file:
@@ -1026,7 +995,6 @@ elif page == "Study Material":
             file_size_mb = len(file_bytes) / (1024 * 1024)
             ext = Path(uploaded_file.name).suffix.lower()
 
-            # Validation
             if len(file_bytes) == 0:
                 st.error("⚠️ The uploaded file is empty. Please upload a valid document or image.")
             elif file_size_mb > MAX_UPLOAD_SIZE_MB:
@@ -1036,43 +1004,126 @@ elif page == "Study Material":
             else:
                 is_img = ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff")
                 file_desc = "Screenshot / Image" if is_img else "Document"
-                st.success(f"✅ {file_desc} selected: **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
+
+                st.markdown(f"""
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px 18px; margin: 12px 0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                        <div>
+                            <span style="font-size: 1.05rem; font-weight: 700; color: #0f172a;">📄 {uploaded_file.name}</span>
+                            <div style="font-size: 0.85rem; color: #64748b; margin-top: 4px;">
+                                Type: <b>{file_desc} ({ext.upper()})</b> &bull; Size: <b>{file_size_mb:.2f} MB</b> &bull; Target Subject: <b>{format_subject(subject)}</b>
+                            </div>
+                        </div>
+                        <span style="background: #e0f2fe; color: #0369a1; font-weight: 600; font-size: 0.8rem; padding: 4px 10px; border-radius: 20px; border: 1px solid #bae6fd;">
+                            Ready to Process
+                        </span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
                 existing_doc = check_duplicate_document(user_id, uploaded_file.name, subject)
                 if existing_doc and existing_doc["status"] == "completed":
-                    st.info(f"ℹ️ '{uploaded_file.name}' is already indexed in your library. You can study it below or re-process if updated.")
+                    st.info(f"ℹ️ '{uploaded_file.name}' is already indexed in your library. Re-processing will refresh its index.")
 
-                if st.button("🚀 Process & Extract Content (OCR & Indexing)", type="primary", use_container_width=True):
-                    try:
-                        user_notes_dir = get_user_notes_dir(user_id, subject)
-                        saved_path = user_notes_dir / uploaded_file.name
+                up_btn_col1, up_btn_col2 = st.columns([0.72, 0.28])
+                with up_btn_col1:
+                    if st.button("🚀 Process & Extract Content (OCR & Indexing)", type="primary", use_container_width=True, key="btn_process_upload"):
+                        try:
+                            user_notes_dir = get_user_notes_dir(user_id, subject)
+                            saved_path = user_notes_dir / uploaded_file.name
 
-                        with open(saved_path, "wb") as f:
-                            f.write(file_bytes)
+                            with open(saved_path, "wb") as f:
+                                f.write(file_bytes)
 
-                        doc_id, job_id = start_background_indexing(
-                            user_id=user_id,
-                            filename=uploaded_file.name,
-                            file_path=str(saved_path),
-                            subject=subject,
-                            file_size=len(file_bytes),
-                            file_type=ext[1:]
-                        )
+                            doc_id, job_id = start_background_indexing(
+                                user_id=user_id,
+                                filename=uploaded_file.name,
+                                file_path=str(saved_path),
+                                subject=subject,
+                                file_size=len(file_bytes),
+                                file_type=ext[1:]
+                            )
 
-                        st.session_state.active_document_id = doc_id
-                        st.session_state.active_doc_summary = None
-                        st.session_state.active_doc_flashcards = None
-                        st.session_state.active_doc_notes = None
+                            st.session_state.active_document_id = doc_id
+                            st.session_state.active_doc_summary = None
+                            st.session_state.active_doc_flashcards = None
+                            st.session_state.active_doc_notes = None
 
-                        st.success(f"Processing started: **Uploading → Processing → Extracting text → Completed**. OCR and indexing running in background.")
+                            st.success("Processing started: OCR and indexing running in background.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to start processing: {e}")
+
+                with up_btn_col2:
+                    if st.button("🗑️ Discard / Remove", use_container_width=True, key="btn_discard_upload"):
+                        st.session_state.material_uploader_version = uploader_version + 1
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to start processing: {e}")
 
         st.markdown("---")
         user_docs = get_user_documents(user_id)
 
+        if user_docs:
+            with st.expander(f"📁 Manage Uploaded Files ({len(user_docs)} {'file' if len(user_docs) == 1 else 'files'})", expanded=False):
+                st.caption("View and manage all uploaded materials. You can independently delete any file to remove its physical data, extracted text, and AI embeddings.")
+                for d in user_docs:
+                    d_id = d["id"]
+                    d_name = d["filename"]
+                    d_subj = d["subject"]
+                    d_size_kb = d["file_size"] / 1024
+                    d_status = d.get("status", "processing")
+                    
+                    status_badge = (
+                        '<span class="badge-completed">🟢 Completed</span>' if d_status == "completed"
+                        else '<span class="badge-processing">🟡 Processing</span>' if d_status == "processing"
+                        else '<span class="badge-failed">🔴 Failed</span>' if d_status == "failed"
+                        else '<span class="badge-queued">⚪ Queued</span>'
+                    )
+
+                    row_c1, row_c2, row_c3 = st.columns([0.62, 0.20, 0.18])
+                    with row_c1:
+                        st.markdown(f"**📄 {d_name}** &bull; <small>{format_subject(d_subj)} &bull; {d_size_kb:.1f} KB</small>", unsafe_allow_html=True)
+                    with row_c2:
+                        st.markdown(status_badge, unsafe_allow_html=True)
+                    with row_c3:
+                        if st.button("🗑️ Delete", key=f"btn_del_row_{d_id}", use_container_width=True):
+                            st.session_state.pending_delete_doc_id = d_id
+                            st.rerun()
+
+                    if st.session_state.get("pending_delete_doc_id") == d_id:
+                        st.warning(f"⚠️ **Confirm Deletion**: Are you sure you want to permanently delete '**{d_name}**'?\n\nThis will remove the file, extracted text, AI vector embeddings, and search index.")
+                        conf_c1, conf_c2, _ = st.columns([0.25, 0.25, 0.5])
+                        with conf_c1:
+                            if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_btn_{d_id}", use_container_width=True):
+                                ok, msg = delete_document_data(
+                                    user_id=user_id,
+                                    document_id=d_id,
+                                    filename=d_name,
+                                    subject=d_subj,
+                                    file_path=d.get("file_path")
+                                )
+                                st.session_state.pending_delete_doc_id = None
+                                if ok:
+                                    if st.session_state.active_document_id == d_id:
+                                        st.session_state.active_document_id = None
+                                        st.session_state.active_doc_summary = None
+                                        st.session_state.active_doc_flashcards = None
+                                        st.session_state.active_doc_notes = None
+                                    if "active_doc_picker" in st.session_state:
+                                        del st.session_state["active_doc_picker"]
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                        with conf_c2:
+                            if st.button("Cancel", key=f"cancel_del_btn_{d_id}", use_container_width=True):
+                                st.session_state.pending_delete_doc_id = None
+                                st.rerun()
+                        st.markdown("<hr style='margin: 8px 0;'>", unsafe_allow_html=True)
+
         if not user_docs:
+            st.session_state.active_document_id = None
+            if "active_doc_picker" in st.session_state:
+                del st.session_state["active_doc_picker"]
             st.info("💡 No learning materials uploaded yet. Upload a document or screenshot above to activate the learning hub.")
         else:
             st.markdown("### 📚 Active Study Material Hub")
@@ -1082,11 +1133,17 @@ elif page == "Study Material":
             doc_labels = list(doc_dict.keys())
 
             selected_idx = 0
-            if st.session_state.active_document_id:
-                for i, d in enumerate(user_docs):
-                    if d["id"] == st.session_state.active_document_id:
-                        selected_idx = i
-                        break
+            matching_indices = [i for i, d in enumerate(user_docs) if d["id"] == st.session_state.active_document_id]
+            
+            if matching_indices:
+                selected_idx = matching_indices[0]
+            else:
+                selected_idx = 0
+                st.session_state.active_document_id = user_docs[0]["id"]
+                if "active_doc_picker" in st.session_state and st.session_state.active_doc_picker not in doc_labels:
+                    del st.session_state["active_doc_picker"]
+
+            selected_idx = max(0, min(selected_idx, len(doc_labels) - 1))
 
             active_doc_label = st.selectbox(
                 "Selected Active Material",
@@ -1106,31 +1163,95 @@ elif page == "Study Material":
             if current_status == "completed":
                 badge_html = '<span class="badge-completed">🟢 COMPLETED & READY</span>'
             elif current_status == "processing":
-                badge_html = f'<span class="badge-processing">🟡 EXTRACTING TEXT ({current_progress}%)</span>'
+                if current_progress < 30:
+                    step_name = "INITIALIZING"
+                elif current_progress < 50:
+                    step_name = "EXTRACTING TEXT & OCR"
+                elif current_progress < 70:
+                    step_name = "CHUNKING DOCUMENT"
+                elif current_progress < 90:
+                    step_name = "GENERATING AI EMBEDDINGS"
+                else:
+                    step_name = "BUILDING SEARCH INDEX"
+                badge_html = f'<span class="badge-processing">🟡 {step_name} ({current_progress}%)</span>'
             elif current_status == "failed":
                 badge_html = '<span class="badge-failed">🔴 PROCESSING FAILED</span>'
             else:
                 badge_html = '<span class="badge-queued">⚪ QUEUED</span>'
 
-            st.markdown(f"""
-            <div class="doc-info-banner">
-                <div>
-                    <strong>{active_doc['filename']}</strong> &bull; Subject: <em>{format_subject(active_doc['subject'])}</em> &bull; Size: {active_doc['file_size'] / 1024:.1f} KB
+            banner_col1, banner_col2 = st.columns([0.80, 0.20])
+            with banner_col1:
+                st.markdown(f"""
+                <div class="doc-info-banner">
+                    <div>
+                        <strong>{active_doc['filename']}</strong> &bull; Subject: <em>{format_subject(active_doc['subject'])}</em> &bull; Size: {active_doc['file_size'] / 1024:.1f} KB
+                    </div>
+                    <div>
+                        {badge_html}
+                    </div>
                 </div>
-                <div>
-                    {badge_html}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+            with banner_col2:
+                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                if st.button("🗑️ Delete File", key=f"btn_del_active_hub_{active_doc['id']}", use_container_width=True):
+                    st.session_state.pending_delete_doc_id = active_doc["id"]
+                    st.rerun()
+
+            if st.session_state.get("pending_delete_doc_id") == active_doc["id"]:
+                st.warning(f"⚠️ **Confirm Deletion**: Are you sure you want to permanently delete active material '**{active_doc['filename']}**'? All extracted text and AI search indexes will be cleared.")
+                c_hub1, c_hub2, _ = st.columns([0.25, 0.25, 0.5])
+                with c_hub1:
+                    if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_hub_{active_doc['id']}", use_container_width=True):
+                        ok, msg = delete_document_data(
+                            user_id=user_id,
+                            document_id=active_doc["id"],
+                            filename=active_doc["filename"],
+                            subject=active_doc["subject"],
+                            file_path=active_doc.get("file_path")
+                        )
+                        st.session_state.pending_delete_doc_id = None
+                        if ok:
+                            st.session_state.active_document_id = None
+                            st.session_state.active_doc_summary = None
+                            st.session_state.active_doc_flashcards = None
+                            st.session_state.active_doc_notes = None
+                            if "active_doc_picker" in st.session_state:
+                                del st.session_state["active_doc_picker"]
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                with c_hub2:
+                    if st.button("Cancel", key=f"cancel_del_hub_{active_doc['id']}", use_container_width=True):
+                        st.session_state.pending_delete_doc_id = None
+                        st.rerun()
 
             if current_status == "processing":
                 st.progress(current_progress / 100.0)
-                p_col1, p_col2 = st.columns([0.8, 0.2])
+                p_col1, p_col2, p_col3 = st.columns([0.6, 0.2, 0.2])
                 with p_col1:
-                    st.info(f"⏳ Status: **Uploading → Processing → Extracting text** ({current_progress}%)... Text is being extracted & OCR processed.")
+                    st.info(f"⏳ Processing in background ({current_progress}%)...")
                 with p_col2:
                     if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_proc"):
                         st.rerun()
+                with p_col3:
+                    if st.button("⚡ Force Re-Index", use_container_width=True, key="btn_force_reindex"):
+                        try:
+                            start_background_indexing(
+                                user_id=user_id,
+                                filename=active_doc["filename"],
+                                file_path=active_doc["file_path"],
+                                subject=active_doc["subject"],
+                                file_size=active_doc["file_size"],
+                                file_type=active_doc.get("file_type", "pdf")
+                            )
+                            st.success("Re-indexing started!")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Re-index failed: {ex}")
+                
+                time.sleep(2)
+                st.rerun()
 
             elif current_status == "failed":
                 st.error(f"❌ Processing failed for '{active_doc['filename']}': {error_msg or 'Unknown error'}")
@@ -1161,10 +1282,9 @@ elif page == "Study Material":
                     "💡 Key Notes & Concept Explanation"
                 ])
 
-                # TAB 1: Grounded Q&A
                 with tab_qa:
                     st.markdown(f"#### Ask Questions About *{active_doc['filename']}*")
-                    st.caption("Ask questions grounded strictly in the content of your selected notes with verified page citations.")
+                    st.caption("Ask questions grounded strictly in your selected notes.")
 
                     qa_col1, qa_col2 = st.columns([0.84, 0.16])
                     with qa_col1:
@@ -1234,11 +1354,8 @@ elif page == "Study Material":
 
                             st.markdown("</div>", unsafe_allow_html=True)
 
-                # TAB 2: Summarize
                 with tab_summary:
                     st.markdown(f"#### AI Summary for *{active_doc['filename']}*")
-                    st.caption("Generate structured takeaways, key definitions, and exam focal points directly from this material.")
-
                     sum_style = st.radio("Summary Style", ["Detailed", "Executive / Bulleted"], horizontal=True, key="sum_style_radio")
 
                     if st.button("Generate Summary", type="primary", key="btn_gen_sum"):
@@ -1276,11 +1393,8 @@ elif page == "Study Material":
                         except Exception:
                             pass
 
-                # TAB 3: Flashcards
                 with tab_flashcards:
                     st.markdown(f"#### Interactive Flashcards for *{active_doc['filename']}*")
-                    st.caption("Test your recall with AI-generated concept cards from this material.")
-
                     fc_col1, fc_col2 = st.columns([0.6, 0.4])
                     with fc_col1:
                         num_cards = st.slider("Number of Flashcards", min_value=3, max_value=12, value=6, key="fc_slider")
@@ -1332,18 +1446,15 @@ elif page == "Study Material":
                                 st.session_state.show_card_back = False
                                 st.rerun()
 
-                # TAB 4: Notes & Concept Explanation
                 with tab_notes:
                     st.markdown(f"#### Structured Concept Explanation for *{active_doc['filename']}*")
-                    st.caption("Deep-dive breakdowns, step-by-step explanations, and real-world analogies.")
-
-                    focus_concept = st.text_input("Specific Concept to Focus On (Optional)", placeholder="e.g. Memory Hierarchy, Paging, Deadlock Avoidance...", key="notes_focus_input")
+                    focus_concept = st.text_input("Specific Concept to Focus On (Optional)", placeholder="e.g. Memory Hierarchy, Deadlocks...", key="notes_focus_input")
 
                     if st.button("Generate Detailed Concept Breakdown", type="primary", key="btn_gen_notes"):
                         if not cached_text:
                             st.warning("No readable text found in document to explain.")
                         else:
-                            with st.spinner("Generating pedagogical explanation and analogies..."):
+                            with st.spinner("Generating explanation and analogies..."):
                                 try:
                                     notes_res = generate_notes_explanation(cached_text, focus_area=focus_concept)
                                     st.session_state.active_doc_notes = notes_res
@@ -1374,59 +1485,11 @@ elif page == "Study Material":
                         except Exception:
                             pass
 
-        st.markdown("---")
-        st.subheader("All Uploaded Documents & Processing Status")
-        st.caption("Real-time persistent status of your uploaded materials and vector indexes.")
-
-        col_ref1, col_ref2 = st.columns([0.85, 0.15])
-        with col_ref2:
-            if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_all_jobs"):
-                st.rerun()
-
-        jobs = get_user_document_jobs(user_id=user_id)
-
-        if not jobs:
-            st.info("No documents uploaded yet. Upload a file above to view processing status.")
-        else:
-            for job in jobs:
-                st.markdown("""
-                <div class="ui-card">
-                """, unsafe_allow_html=True)
-
-                status = job["status"]
-                if status == "completed":
-                    badge_html = '<span class="badge-completed">🟢 COMPLETED</span>'
-                elif status == "processing":
-                    badge_html = f'<span class="badge-processing">🟡 PROCESSING ({job["progress"]}%)</span>'
-                elif status == "failed":
-                    badge_html = '<span class="badge-failed">🔴 FAILED</span>'
-                else:
-                    badge_html = '<span class="badge-queued">⚪ QUEUED</span>'
-
-                j_col1, j_col2 = st.columns([0.7, 0.3])
-                with j_col1:
-                    st.markdown(f"**{job['filename']}** &nbsp; {badge_html}", unsafe_allow_html=True)
-                    st.caption(f"Subject: **{format_subject(job['subject'])}** &bull; Created: {job['created_at'][:19].replace('T', ' ')}")
-                with j_col2:
-                    if job["completed_at"]:
-                        st.caption(f"Completed: {job['completed_at'][:19].replace('T', ' ')}")
-
-                if status == "processing":
-                    st.progress(job["progress"] / 100.0)
-
-                if status == "failed" and job["error_message"]:
-                    st.error(f"Error: {job['error_message']}")
-
-                st.markdown("</div>", unsafe_allow_html=True)
-
-    # --------------------------------------------------
-    # TAB 2: MULTI-NOTES STUDIO (UNLIMITED PERSISTENT NOTES)
-    # --------------------------------------------------
     with tab_notes_studio:
         st.markdown("""
         <div class="ui-card">
             <h4 class="ui-card-title">📝 Multi-Notes Studio</h4>
-            <p class="ui-card-subtitle">Create, organize, and edit unlimited study notes with rich Markdown formatting, attached screenshots/documents, and persistent user storage.</p>
+            <p class="ui-card-subtitle">Create, organize, and edit unlimited study notes with rich Markdown formatting.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1448,11 +1511,11 @@ elif page == "Study Material":
                 st.success("New note created!")
                 st.rerun()
 
-        user_notes = get_user_notes(user_id=user_id, subject=note_subj_filter)
+        filter_subject = None if note_subj_filter == "All Subjects" else note_subj_filter
+        user_notes = get_user_notes(user_id=user_id, subject=filter_subject)
         if note_search.strip():
             user_notes = [n for n in user_notes if note_search.lower() in n["title"].lower() or note_search.lower() in n["content"].lower()]
 
-        # Active Note Editor
         if st.session_state.active_note_id is not None:
             active_note = get_note_by_id(st.session_state.active_note_id, user_id=user_id)
             if active_note:
@@ -1465,9 +1528,9 @@ elif page == "Study Material":
                 with ed_c2:
                     curr_subj = active_note["subject"]
                     subj_idx = available_subjects.index(curr_subj) if curr_subj in available_subjects else 0
+                    subj_idx = max(0, min(subj_idx, len(available_subjects) - 1)) if available_subjects else 0
                     edit_subject = st.selectbox("Subject", available_subjects, index=subj_idx, format_func=lambda s: format_subject(s), key=f"note_subj_{active_note['id']}")
 
-                # Associated files selector
                 completed_docs = get_user_completed_documents(user_id)
                 available_doc_names = [d["filename"] for d in completed_docs]
                 curr_attached = [f for f in active_note.get("associated_files", []) if f in available_doc_names]
@@ -1527,9 +1590,8 @@ elif page == "Study Material":
 
                 st.markdown("---")
 
-        # Display Notes Cards / Grid
         if not user_notes:
-            st.info("No notes found. Click **+ New Note** above to create your first persistent revision note.")
+            st.info("No notes found. Click **+ New Note** above to create your first note.")
         else:
             st.markdown(f"#### 📋 Your Notes ({len(user_notes)})")
             for note in user_notes:
@@ -1544,13 +1606,13 @@ elif page == "Study Material":
                     </div>
                     <div style="font-size:0.82rem; color:#64748b; margin-bottom:8px;">
                         Created: {note['created_at'][:19].replace('T', ' ')} &bull; Updated: {note['updated_at'][:19].replace('T', ' ')}
-                        {f" &bull; 📎 {len(note['associated_files'])} file(s)" if note['associated_files'] else ""}
+                        {f" &bull; 📎 {len(note['associated_files'])} file(s)" if note.get('associated_files') else ""}
                     </div>
                 """, unsafe_allow_html=True)
 
                 with st.expander(f"Preview: {note['title']}"):
                     st.markdown(note["content"])
-                    if note["associated_files"]:
+                    if note.get("associated_files"):
                         st.caption(f"Attached files: {', '.join(note['associated_files'])}")
 
                 nc_1, nc_2, nc_3 = st.columns([0.33, 0.33, 0.34])
@@ -1587,21 +1649,19 @@ elif page == "Study Material":
 
 
 # ==================================================
-# REQUIREMENT 4: ADAPTIVE BACKGROUND QUIZ & PRACTICE HUB
+# QUIZ & PRACTICE
 # ==================================================
 
 elif page == "Quiz & Practice":
     st.subheader("Adaptive Background Quiz & Practice Hub")
-    st.caption("Generate targeted quizzes that process independently in the background while you navigate freely across the app.")
+    st.caption("Generate targeted quizzes that process independently in the background.")
 
     completed_docs = get_user_completed_documents(user_id)
     user_quiz_jobs = get_user_quiz_jobs(user_id=user_id)
 
-    # Check for active background quiz jobs
     active_qjobs = [q for q in user_quiz_jobs if q["status"] in ("pending", "processing")]
     latest_qjob = user_quiz_jobs[0] if user_quiz_jobs else None
 
-    # Persistent Job Progress Banner
     if active_qjobs:
         curr_active_qjob = active_qjobs[0]
         st.markdown(f"""
@@ -1611,7 +1671,6 @@ elif page == "Quiz & Practice":
                     <h4 style="color:#b45309; margin:0 0 4px 0;">⏳ Quiz Generation in Progress...</h4>
                     <p style="color:#92400e; margin:0; font-size:0.9rem;">
                         Generating <strong>{curr_active_qjob['topic']}</strong> ({curr_active_qjob['difficulty']} Level &bull; {curr_active_qjob['number_of_questions']} questions).
-                        You can navigate to <strong>Profile</strong>, <strong>AI Tutor</strong>, or <strong>Dashboard</strong> while it finishes.
                     </p>
                 </div>
                 <div>
@@ -1622,13 +1681,19 @@ elif page == "Quiz & Practice":
         """, unsafe_allow_html=True)
         st.progress(curr_active_qjob["progress"] / 100.0)
 
-        q_ref1, q_ref2 = st.columns([0.8, 0.2])
+        q_ref1, q_ref2, q_ref3 = st.columns([0.6, 0.2, 0.2])
         with q_ref2:
-            if st.button("🔄 Refresh Quiz Status", use_container_width=True, key="btn_ref_q_job"):
+            if st.button("🔄 Refresh Status", use_container_width=True, key="btn_ref_q_job"):
+                st.rerun()
+        with q_ref3:
+            if st.button("❌ Dismiss Job", use_container_width=True, key=f"btn_cancel_q_job_{curr_active_qjob['id']}"):
+                delete_quiz_job(curr_active_qjob["id"], user_id)
                 st.rerun()
 
+        time.sleep(2)
+        st.rerun()
+
     elif latest_qjob and latest_qjob["status"] == "completed" and (st.session_state.quiz is None or st.session_state.quiz_submitted):
-        # Notify user a completed quiz is ready to take
         st.markdown(f"""
         <div class="ui-card" style="border-left: 4px solid #10b981; background: #f0fdf4;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1658,7 +1723,6 @@ elif page == "Quiz & Practice":
 
     st.markdown("---")
 
-    # Quiz Generator Form
     st.markdown("### 🚀 Create New Practice Quiz")
     quiz_mode = st.radio(
         "Quiz Source Mode",
@@ -1677,29 +1741,28 @@ elif page == "Quiz & Practice":
             q_col1, q_col2 = st.columns(2)
             with q_col1:
                 doc_map = {f"📄 {d['filename']} ({format_subject(d['subject'])})": d for d in completed_docs}
+                doc_choices = list(doc_map.keys())
 
                 def_doc_idx = 0
-                if st.session_state.active_document_id:
-                    for idx, d in enumerate(completed_docs):
-                        if d["id"] == st.session_state.active_document_id:
-                            def_doc_idx = idx
-                            break
+                matching_q_indices = [i for i, d in enumerate(completed_docs) if d["id"] == st.session_state.active_document_id]
+                if matching_q_indices:
+                    def_doc_idx = matching_q_indices[0]
+                
+                def_doc_idx = max(0, min(def_doc_idx, len(doc_choices) - 1))
+                
+                if "quiz_doc_select" in st.session_state and st.session_state.quiz_doc_select not in doc_choices:
+                    del st.session_state["quiz_doc_select"]
 
                 chosen_label = st.selectbox(
                     "Select Source Document / Notes",
-                    list(doc_map.keys()),
+                    doc_choices,
                     index=def_doc_idx,
                     key="quiz_doc_select"
                 )
                 chosen_doc = doc_map[chosen_label]
 
             with q_col2:
-                target_level = st.selectbox(
-                    "Target Level",
-                    ["Beginner", "Intermediate", "Advanced"],
-                    index=1,
-                    key="quiz_mat_target_level"
-                )
+                target_level = st.selectbox("Target Level", ["Beginner", "Intermediate", "Advanced"], index=1, key="quiz_mat_target_level")
                 number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_mat_num_slider")
 
             if st.button("Start Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_mat"):
@@ -1724,28 +1787,17 @@ elif page == "Quiz & Practice":
                     st.session_state.active_quiz_job_id = job_id
                     st.session_state.quiz = None
                     st.session_state.quiz_submitted = False
-                    st.success(f"Quiz job #{job_id} started in background! You can navigate anywhere.")
+                    st.success(f"Quiz job #{job_id} started in background!")
                     st.rerun()
 
     else:
-        # Custom Manual Topic Mode
         q_col1, q_col2 = st.columns(2)
         with q_col1:
-            subject = st.selectbox(
-                "Subject",
-                available_subjects,
-                format_func=lambda s: format_subject(s),
-                key="quiz_sub_select"
-            )
-            topic = st.text_input("Topic", placeholder="e.g. Normalization, Process Synchronization, TCP Handshake...", key="quiz_top_input")
+            subject = st.selectbox("Subject", available_subjects, format_func=lambda s: format_subject(s), key="quiz_sub_select")
+            topic = st.text_input("Topic", placeholder="e.g. Normalization, Process Synchronization...", key="quiz_top_input")
 
         with q_col2:
-            target_level = st.selectbox(
-                "Target Level",
-                ["Beginner", "Intermediate", "Advanced"],
-                index=1,
-                key="quiz_target_level"
-            )
+            target_level = st.selectbox("Target Level", ["Beginner", "Intermediate", "Advanced"], index=1, key="quiz_target_level")
             number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_num_slider")
 
         if st.button("🚀 Start Background Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_top"):
@@ -1764,12 +1816,10 @@ elif page == "Quiz & Practice":
                 st.session_state.active_quiz_job_id = job_id
                 st.session_state.quiz = None
                 st.session_state.quiz_submitted = False
-                st.success(f"Quiz job #{job_id} for '{topic.strip()}' started in background! You can navigate anywhere.")
+                st.success(f"Quiz job #{job_id} for '{topic.strip()}' started in background!")
                 st.rerun()
 
-    # --------------------------------------------------
-    # RENDER ACTIVE QUIZ & SUBMISSION
-    # --------------------------------------------------
+    # RENDER ACTIVE QUIZ INSIDE ST.FORM
     if st.session_state.quiz:
         st.markdown("---")
         quiz = st.session_state.quiz
@@ -1781,93 +1831,92 @@ elif page == "Quiz & Practice":
         </div>
         """, unsafe_allow_html=True)
 
-        for i, question in enumerate(quiz):
-            st.markdown(f"**Question {i + 1}:** {question['question']}")
-
-            current_choice = st.session_state.quiz_answers.get(i)
-
-            answer = st.radio(
-                f"Select answer for Question {i + 1}",
-                options=question["options"],
-                index=current_choice,
-                key=f"mcq_q_{i}_{len(quiz)}",
-                label_visibility="collapsed"
-            )
-
-            if answer is not None and answer in question["options"]:
-                st.session_state.quiz_answers[i] = question["options"].index(answer)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
         if not st.session_state.quiz_submitted:
-            if st.button("Submit Quiz", type="primary"):
-                is_complete, missing_questions = validate_all_answered(quiz, st.session_state.quiz_answers)
+            with st.form(key="active_quiz_form"):
+                form_answers = {}
+                for i, question in enumerate(quiz):
+                    st.markdown(f"**Question {i + 1}:** {question['question']}")
 
-                if not is_complete:
-                    missing_str = ", ".join([f"Question {q}" for q in missing_questions])
-                    st.warning(f"⚠️ Please answer all questions before submitting. Unanswered: **{missing_str}**")
-                else:
-                    correct, total, score, details = calculate_score(
-                        quiz,
-                        st.session_state.quiz_answers
+                    current_choice = st.session_state.quiz_answers.get(i)
+                    safe_index = current_choice if (current_choice is not None and 0 <= current_choice < len(question["options"])) else None
+
+                    selected = st.radio(
+                        f"Select answer for Question {i + 1}",
+                        options=question["options"],
+                        index=safe_index,
+                        key=f"form_mcq_{i}",
+                        label_visibility="collapsed"
                     )
+                    if selected in question["options"]:
+                        form_answers[i] = question["options"].index(selected)
+                    st.markdown("<br>", unsafe_allow_html=True)
 
-                    answers_for_db = []
-                    for detail in details:
-                        answers_for_db.append({
-                            "question": detail["question"],
-                            "selected_answer": detail["selected_answer"],
-                            "correct_answer": detail["correct_answer"],
-                            "is_correct": detail["is_correct"]
-                        })
+                submit_btn = st.form_submit_button("Submit Quiz", type="primary", use_container_width=True)
 
-                    save_quiz_result(
-                        st.session_state.quiz_subject,
-                        st.session_state.quiz_topic,
-                        st.session_state.quiz_difficulty,
-                        score,
-                        total,
-                        correct,
-                        answers_for_db,
-                        user_id=user_id
-                    )
+                if submit_btn:
+                    st.session_state.quiz_answers = form_answers
+                    is_complete, missing_questions = validate_all_answered(quiz, form_answers)
 
-                    st.session_state.quiz_submitted = True
-                    st.session_state.quiz_score_details = (correct, total, score, details)
-                    st.rerun()
+                    if not is_complete:
+                        missing_str = ", ".join([f"Question {q}" for q in missing_questions])
+                        st.warning(f"⚠️ Please answer all questions before submitting. Unanswered: **{missing_str}**")
+                    else:
+                        correct, total, score, details = calculate_score(quiz, form_answers)
 
-        if st.session_state.quiz_submitted and st.session_state.quiz_score_details:
-            correct, total, score, details = st.session_state.quiz_score_details
+                        answers_for_db = []
+                        for detail in details:
+                            answers_for_db.append({
+                                "question": detail["question"],
+                                "selected_answer": detail["selected_answer"],
+                                "correct_answer": detail["correct_answer"],
+                                "is_correct": detail["is_correct"]
+                            })
 
-            st.markdown(f"""
-            <div class="ui-card">
-                <h3 class="ui-card-title">Quiz Results: {st.session_state.quiz_topic} ({st.session_state.quiz_difficulty})</h3>
-                <p class="ui-card-subtitle">Score: <strong>{correct}/{total}</strong> ({score:.1f}%)</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-            for idx, detail in enumerate(details):
-                st.markdown("---")
-                if detail["is_correct"]:
-                    st.markdown(f'<span class="status-badge-correct">CORRECT</span> &nbsp; **{detail["question"]}**', unsafe_allow_html=True)
-                    st.write(f"Your answer: {detail['selected_answer']}")
-                else:
-                    st.markdown(f'<span class="status-badge-wrong">INCORRECT</span> &nbsp; **{detail["question"]}**', unsafe_allow_html=True)
-                    st.write(f"Your answer: {detail['selected_answer']}")
-                    st.write(f"Correct answer: {detail['correct_answer']}")
-
-                    with st.expander(f"Explain Solution for Question {idx + 1}"):
-                        explanation = explain_mistake(
-                            detail["question"],
-                            detail["selected_answer"],
-                            detail["correct_answer"],
-                            st.session_state.quiz_topic
+                        save_quiz_result(
+                            st.session_state.quiz_subject,
+                            st.session_state.quiz_topic,
+                            st.session_state.quiz_difficulty,
+                            score,
+                            total,
+                            correct,
+                            answers_for_db,
+                            user_id=user_id
                         )
-                        st.write(explanation)
 
-    # --------------------------------------------------
-    # PREVIOUSLY GENERATED QUIZZES REPOSITORY
-    # --------------------------------------------------
+                        st.session_state.quiz_submitted = True
+                        st.session_state.quiz_score_details = (correct, total, score, details)
+                        st.rerun()
+
+        else:
+            if st.session_state.quiz_score_details:
+                correct, total, score, details = st.session_state.quiz_score_details
+
+                st.markdown(f"""
+                <div class="ui-card">
+                    <h3 class="ui-card-title">Quiz Results: {st.session_state.quiz_topic} ({st.session_state.quiz_difficulty})</h3>
+                    <p class="ui-card-subtitle">Score: <strong>{correct}/{total}</strong> ({score:.1f}%)</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                for idx, detail in enumerate(details):
+                    st.markdown("---")
+                    if detail["is_correct"]:
+                        st.markdown(f'<span class="status-badge-correct">CORRECT</span> &nbsp; **{detail["question"]}**', unsafe_allow_html=True)
+                        st.write(f"Your answer: {detail['selected_answer']}")
+                    else:
+                        st.markdown(f'<span class="status-badge-wrong">INCORRECT</span> &nbsp; **{detail["question"]}**', unsafe_allow_html=True)
+                        st.write(f"Your answer: {detail['selected_answer']}")
+                        st.write(f"Correct answer: {detail['correct_answer']}")
+
+                        with st.expander(f"Explain Solution for Question {idx + 1}"):
+                            explanation = explain_mistake(
+                                detail["question"],
+                                detail["selected_answer"],
+                                detail["correct_answer"],
+                                st.session_state.quiz_topic
+                            )
+                            st.write(explanation)
+
     if user_quiz_jobs:
         st.markdown("---")
         with st.expander("📚 Saved Generated Quizzes & Generation History"):
@@ -1903,7 +1952,7 @@ elif page == "Quiz & Practice":
 
 elif page == "Performance & Analytics":
     st.subheader("Performance & Analytics")
-    st.caption("Track your learning progress, mastery metrics, and predictive insights.")
+    st.caption("Track learning progress, mastery metrics, and predictive insights.")
 
     rows = get_topic_performance(user_id=user_id)
     df = load_performance_data(rows)
@@ -1943,12 +1992,12 @@ elif page == "Performance & Analytics":
 
 
 # ==================================================
-# RECOMMENDATIONS & PERSONALIZED STUDY PLANNER
+# RECOMMENDATIONS & STUDY PLANNER
 # ==================================================
 
 elif page == "Recommendations & Study Plan":
     st.subheader("Personalized Study Planner & Recommendations")
-    st.caption("Design custom study schedules with exact day allocations, minute-level precision, and PDF export.")
+    st.caption("Design custom study schedules with exact day allocations and PDF export.")
 
     rows = get_topic_performance(user_id=user_id)
     df = load_performance_data(rows)
@@ -1980,7 +2029,7 @@ elif page == "Recommendations & Study Plan":
     st.markdown("""
     <div class="ui-card">
         <h3 class="ui-card-title">Create Personalized Study Schedule</h3>
-        <p class="ui-card-subtitle">Set your target topic, proficiency level, available study days, and exact daily study duration.</p>
+        <p class="ui-card-subtitle">Set your target topic, proficiency level, available study days, and exact duration.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1988,7 +2037,7 @@ elif page == "Recommendations & Study Plan":
     with p_col1:
         planner_topic = st.text_input(
             "Study Topic",
-            placeholder="e.g. Transaction, Operating Systems Memory Management, Machine Learning Regression...",
+            placeholder="e.g. Transaction, Operating Systems Memory Management...",
             key="planner_topic_input"
         )
     with p_col2:
@@ -2000,8 +2049,6 @@ elif page == "Recommendations & Study Plan":
         )
 
     st.markdown("##### 📅 Available Study Days")
-    st.caption("Select the specific days of the week you plan to study.")
-
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_cols = st.columns(7)
     selected_days = []
@@ -2019,9 +2066,7 @@ elif page == "Recommendations & Study Plan":
     total_weekly_minutes = 0
 
     if selected_days:
-        st.markdown("##### Daily Study Duration ")
-        st.caption("Specify your available study time for each selected day.")
-
+        st.markdown("##### Daily Study Duration")
         minute_options = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
 
         for day in selected_days:
@@ -2031,7 +2076,7 @@ elif page == "Recommendations & Study Plan":
             with dur_col2:
                 d_hours = st.number_input(f"Hours ({day})", min_value=0, max_value=12, value=2 if day != "Saturday" else 3, key=f"hrs_{day}", label_visibility="collapsed")
             with dur_col3:
-                def_min_idx = 6 if day == "Monday" else 0  # 30 mins for Monday
+                def_min_idx = minute_options.index(30) if day == "Monday" and 30 in minute_options else 0
                 d_mins = st.selectbox(f"Minutes ({day})", options=minute_options, index=def_min_idx, key=f"mins_{day}", label_visibility="collapsed")
             with dur_col4:
                 d_total_mins = (d_hours * 60) + d_mins

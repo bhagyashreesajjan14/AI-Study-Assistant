@@ -1,5 +1,7 @@
 streamlit
 ollama
+groq
+langchain-groq
 pymupdf
 faiss-cpu
 numpy

@@ -31,12 +31,14 @@ from config import (
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TOP_K,
+    get_user_notes_dir,
     get_user_vector_dir
 )
 from database import (
     create_document_job,
     update_job_status,
-    save_document_extracted_text
+    save_document_extracted_text,
+    delete_user_document
 )
 
 
@@ -370,18 +372,85 @@ def create_chunks(
     return chunks
 
 
-def get_embeddings(texts: List[str]) -> np.ndarray:
-    """Generates normalized vector embeddings via Ollama embedding model."""
+_cached_embedding_model: Optional[str] = None
+
+
+def get_active_embedding_model() -> str:
+    """Returns cached or auto-detected available Ollama embedding model."""
+    global _cached_embedding_model
+    if _cached_embedding_model:
+        return _cached_embedding_model
+
+    try:
+        model_list = ollama.list()
+        available = [m.model for m in getattr(model_list, "models", [])]
+        if EMBEDDING_MODEL in available:
+            _cached_embedding_model = EMBEDDING_MODEL
+            return _cached_embedding_model
+
+        for candidate in available:
+            if any(k in candidate.lower() for k in ("embed", "minilm", "nomic", "bge", "qwen")):
+                _cached_embedding_model = candidate
+                return _cached_embedding_model
+
+        if available:
+            _cached_embedding_model = available[0]
+            return _cached_embedding_model
+    except Exception:
+        pass
+
+    _cached_embedding_model = EMBEDDING_MODEL
+    return _cached_embedding_model
+
+
+def get_embeddings(
+    texts: List[str],
+    batch_size: int = 4,
+    progress_callback: Optional[Any] = None
+) -> np.ndarray:
+    """Generates normalized vector embeddings via Ollama embedding model with batching and progress tracking."""
     if not texts:
         return np.empty((0, 0), dtype="float32")
 
-    response = ollama.embed(
-        model=EMBEDDING_MODEL,
-        input=texts
-    )
+    model_name = get_active_embedding_model()
+    all_embeddings: List[List[float]] = []
+    total = len(texts)
+
+    for i in range(0, total, batch_size):
+        batch = texts[i:i + batch_size]
+        try:
+            response = ollama.embed(
+                model=model_name,
+                input=batch
+            )
+            raw_emb = response.get("embeddings", [])
+            if isinstance(raw_emb, list) and len(raw_emb) > 0:
+                if isinstance(raw_emb[0], list):
+                    all_embeddings.extend(raw_emb)
+                else:
+                    all_embeddings.append(raw_emb)
+        except Exception:
+            # Fallback to single text embedding if batch fails
+            for single_text in batch:
+                single_resp = ollama.embed(
+                    model=model_name,
+                    input=single_text
+                )
+                raw_s = single_resp.get("embeddings", [])
+                if isinstance(raw_s, list) and len(raw_s) > 0:
+                    if isinstance(raw_s[0], list):
+                        all_embeddings.extend(raw_s)
+                    else:
+                        all_embeddings.append(raw_s)
+
+        if progress_callback:
+            try:
+                progress_callback(min(total, i + len(batch)), total)
+            except Exception:
+                pass
 
     embeddings = np.array(
-        response["embeddings"],
+        all_embeddings,
         dtype="float32"
     )
 
@@ -544,6 +613,154 @@ def search_user_notes(
     return all_results[:top_k]
 
 
+def _filter_and_rebuild_index(
+    index: Optional[faiss.IndexFlatIP],
+    chunks: List[Dict[str, Any]],
+    document_id: int,
+    filename: str
+) -> Tuple[Optional[faiss.IndexFlatIP], List[Dict[str, Any]]]:
+    """
+    Instantly extracts existing vectors from FAISS index and rebuilds without re-running Ollama embeddings.
+    Falls back to computing embeddings if index vectors cannot be extracted.
+    """
+    if not chunks:
+        return None, []
+
+    keep_indices = []
+    remaining_chunks = []
+    for idx, c in enumerate(chunks):
+        if c.get("document_id") != document_id and c.get("source") != filename and c.get("filename") != filename:
+            keep_indices.append(idx)
+            remaining_chunks.append(c)
+
+    if not remaining_chunks:
+        return None, []
+
+    # 1. Fast path: Extract vectors instantly from existing FAISS index (0ms)
+    if index is not None and index.ntotal == len(chunks):
+        try:
+            all_vecs = index.reconstruct_n(0, index.ntotal)
+            remaining_vecs = all_vecs[keep_indices]
+            new_idx = faiss.IndexFlatIP(index.d)
+            new_idx.add(remaining_vecs)
+            return new_idx, remaining_chunks
+        except Exception:
+            try:
+                vec_list = [index.reconstruct(i) for i in keep_indices]
+                remaining_vecs = np.array(vec_list, dtype="float32")
+                new_idx = faiss.IndexFlatIP(index.d)
+                new_idx.add(remaining_vecs)
+                return new_idx, remaining_chunks
+            except Exception:
+                pass
+
+    # 2. Fallback path if index was out of sync or missing
+    try:
+        texts = [c["text"] for c in remaining_chunks]
+        embeddings = get_embeddings(texts)
+        if len(embeddings) > 0 and embeddings.shape[0] > 0:
+            new_idx = faiss.IndexFlatIP(embeddings.shape[1])
+            new_idx.add(embeddings)
+            return new_idx, remaining_chunks
+    except Exception:
+        pass
+
+    return None, remaining_chunks
+
+
+def delete_document_data(
+    user_id: int,
+    document_id: int,
+    filename: str,
+    subject: str,
+    file_path: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Instantly and completely purges an uploaded document:
+    1. Removes the physical file from disk.
+    2. Filters vector index & chunks using existing FAISS vectors in memory (instant, no Ollama calls).
+    3. Deletes document and job records from database.
+    """
+    try:
+        # 1. Remove physical file from disk
+        candidate_paths = []
+        if file_path:
+            candidate_paths.append(Path(file_path))
+        user_notes_dir = get_user_notes_dir(user_id, subject)
+        candidate_paths.append(user_notes_dir / filename)
+
+        for p in candidate_paths:
+            try:
+                if p.exists() and p.is_file():
+                    p.unlink()
+            except Exception:
+                pass
+
+        # 2. Update Vector Store & Chunks for the primary subject (instant)
+        if subject and subject != "General":
+            index_path, metadata_path = get_user_subject_index_paths(user_id, subject)
+            if index_path.exists() and metadata_path.exists():
+                try:
+                    index, existing_chunks = load_index(index_path, metadata_path)
+                    new_idx, remaining_chunks = _filter_and_rebuild_index(index, existing_chunks, document_id, filename)
+                    if remaining_chunks and new_idx is not None:
+                        save_index(new_idx, remaining_chunks, index_path, metadata_path)
+                    else:
+                        # Clean up index files if no chunks remain
+                        try:
+                            if index_path.exists():
+                                index_path.unlink()
+                        except Exception:
+                            pass
+                        try:
+                            if metadata_path.exists():
+                                metadata_path.unlink()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        # Also check other subject vector stores in user directory if any
+        user_vec_dir = get_user_vector_dir(user_id)
+        if user_vec_dir.exists():
+            for meta_file in list(user_vec_dir.glob("*.json")):
+                if subject and meta_file.stem == subject:
+                    continue  # already handled above
+                idx_file = meta_file.with_suffix(".index")
+                if not idx_file.exists():
+                    continue
+                try:
+                    index, chunks = load_index(idx_file, meta_file)
+                    has_doc_chunk = any(
+                        c.get("document_id") == document_id or c.get("source") == filename or c.get("filename") == filename
+                        for c in chunks
+                    )
+                    if has_doc_chunk:
+                        new_idx, remaining_chunks = _filter_and_rebuild_index(index, chunks, document_id, filename)
+                        if remaining_chunks and new_idx is not None:
+                            save_index(new_idx, remaining_chunks, idx_file, meta_file)
+                        else:
+                            try:
+                                if idx_file.exists():
+                                    idx_file.unlink()
+                            except Exception:
+                                pass
+                            try:
+                                if meta_file.exists():
+                                    meta_file.unlink()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+        # 3. Delete from database
+        delete_user_document(document_id, user_id)
+
+        return True, f"'{filename}' and all associated data were successfully deleted."
+    except Exception as e:
+        return False, f"Failed to delete document: {str(e)}"
+
+
 # --------------------------------------------------
 # BACKGROUND ASYNCHRONOUS DOCUMENT/IMAGE WORKER
 # --------------------------------------------------
@@ -608,10 +825,18 @@ def process_document_background(
         combined_chunks = [c for c in existing_chunks if c.get("source") != filename]
         combined_chunks.extend(new_chunks)
 
-        # Step 5: Compute Ollama embeddings (75%)
+        # Step 5: Compute Ollama embeddings (75% -> 88%)
         update_job_status(job_id, status="processing", progress=75)
         texts = [item["text"] for item in combined_chunks]
-        embeddings = get_embeddings(texts)
+
+        def on_embed_progress(current_count: int, total_count: int):
+            pct = 75 + int((current_count / max(1, total_count)) * 13)
+            update_job_status(job_id, status="processing", progress=min(88, pct))
+
+        try:
+            embeddings = get_embeddings(texts, batch_size=4, progress_callback=on_embed_progress)
+        except TypeError:
+            embeddings = get_embeddings(texts)
 
         # Step 6: Build FAISS index and save persistently (90%)
         update_job_status(job_id, status="processing", progress=90)

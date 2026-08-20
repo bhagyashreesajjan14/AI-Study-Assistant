@@ -9,7 +9,13 @@ from config import DB_PATH, DEFAULT_SUBJECTS
 
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
+    return conn
 
 
 def hash_password(password: str) -> str:
@@ -721,6 +727,23 @@ def get_job_by_id(job_id: int) -> Optional[Dict[str, Any]]:
         "started_at": r[10],
         "completed_at": r[11]
     }
+
+
+def delete_user_document(document_id: int, user_id: int) -> bool:
+    """Safely deletes a document and associated job records for a specific user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM document_jobs WHERE (document_id = ? OR filename IN (SELECT filename FROM documents WHERE id = ?)) AND user_id = ?", (document_id, document_id, user_id))
+        cursor.execute("DELETE FROM documents WHERE id = ? AND user_id = ?", (document_id, user_id))
+        deleted_count = cursor.rowcount
+        conn.commit()
+        return deleted_count > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------

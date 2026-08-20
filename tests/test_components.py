@@ -84,11 +84,15 @@ def test_study_planner_format_duration():
     assert format_duration(0, 0) == "0 minutes"
 
 
-@patch("study_planner.ollama.chat")
-def test_study_planner_generation_and_pdf(mock_chat):
-    mock_chat.return_value = {
-        "message": {"content": "## Day 1 — Monday\n- Review Transaction concepts\n- Practice ACID questions"}
-    }
+from unittest.mock import patch, MagicMock
+
+@patch("study_planner.get_groq_client")
+def test_study_planner_generation_and_pdf(mock_get_client):
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=MagicMock(content="## Day 1 — Monday\n- Review Transaction concepts\n- Practice ACID questions"))]
+    mock_client.chat.completions.create.return_value = mock_response
     schedules = [
         {"day": "Monday", "hours": 2, "minutes": 30, "total_minutes": 150},
         {"day": "Wednesday", "hours": 1, "minutes": 30, "total_minutes": 90}

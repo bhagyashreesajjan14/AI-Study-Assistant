@@ -286,31 +286,21 @@ def test_full_user_flow_and_relogin(tmp_path):
 
     # Step 7: Reuse the same extracted content across features
     # Feature 7a: Quiz from material
-    with patch("ai.ollama.chat") as mock_chat:
-        mock_chat.return_value = {
-            "message": {
-                "content": '{"questions": [{"question": "What metric is used for tree splitting?", "options": ["Gini impurity", "Accuracy", "Recall", "F1"], "answer": 0, "explanation": "Gini is used."}]}'
-            }
-        }
+    with patch("ai._chat_completion") as mock_chat:
+        mock_chat.return_value = '{"questions": [{"question": "What metric is used for tree splitting?", "options": ["Gini impurity", "Accuracy", "Recall", "F1"], "answer": 0, "explanation": "Gini is used."}]}'
         quiz = ai.generate_quiz_from_material(docs[0]["extracted_text"], "machine_learning", "Intermediate", 1)
         assert len(quiz["questions"]) == 1
         assert quiz["questions"][0]["options"][0] == "Gini impurity"
 
     # Feature 7b: Summary from the same material
-    with patch("ai.ollama.chat") as mock_chat:
-        mock_chat.return_value = {
-            "message": {"content": "**Core Summary**\nDecision trees split based on information gain."}
-        }
+    with patch("ai._chat_completion") as mock_chat:
+        mock_chat.return_value = "**Core Summary**\nDecision trees split based on information gain."
         summary = ai.generate_summary(docs[0]["extracted_text"])
         assert "Decision trees" in summary
 
     # Feature 7c: Flashcards from the same material
-    with patch("ai.ollama.chat") as mock_chat:
-        mock_chat.return_value = {
-            "message": {
-                "content": '{"flashcards": [{"front": "Gini Impurity", "back": "A measure of purity for splits", "tag": "ML"}]}'
-            }
-        }
+    with patch("ai._chat_completion") as mock_chat:
+        mock_chat.return_value = '{"flashcards": [{"front": "Gini Impurity", "back": "A measure of purity for splits", "tag": "ML"}]}'
         fcs = ai.generate_flashcards(docs[0]["extracted_text"], 1)
         assert len(fcs) == 1
         assert fcs[0]["front"] == "Gini Impurity"

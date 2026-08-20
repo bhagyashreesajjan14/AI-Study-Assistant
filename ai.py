@@ -1,8 +1,71 @@
 import json
+import re
+import threading
 from typing import List, Dict, Any, Optional
-import ollama
+from groq import Groq
 
-from config import LLM_MODEL
+from config import LLM_MODEL, get_groq_api_key
+from database import update_quiz_job_status, create_quiz_job
+
+
+def fix_mermaid_syntax(markdown_text: str) -> str:
+    """
+    Fixes common Mermaid diagram parse errors caused by unquoted parentheses, brackets, or colons
+    inside node labels like D[Explore (EDA)] -> D["Explore (EDA)"].
+    """
+    if not markdown_text or "```mermaid" not in markdown_text:
+        return markdown_text
+
+    def _repair_block(match: re.Match) -> str:
+        code = match.group(1)
+        lines = []
+        for line in code.splitlines():
+            # Fix unquoted square bracket node labels with parentheses: D[Explore (EDA)] -> D["Explore (EDA)"]
+            line = re.sub(r'(\b[A-Za-z0-9_]+)\[([^"\]\n]*\([^"\]\n]*\)[^"\]\n]*)\]', r'\1["\2"]', line)
+            # Fix unquoted round bracket node labels with parentheses: D(Explore (EDA)) -> D("Explore (EDA)")
+            line = re.sub(r'(\b[A-Za-z0-9_]+)\(([^"\)\n]*\([^"\)\n]*\)[^"\)\n]*)\)', r'\1("\2")', line)
+            # Fix unquoted curly bracket node labels with parentheses: D{Explore (EDA)} -> D{"Explore (EDA)"}
+            line = re.sub(r'(\b[A-Za-z0-9_]+)\{([^"\}\n]*\([^"\}\n]*\)[^"\}\n]*)\}', r'\1{"\2"}', line)
+            lines.append(line)
+        return "```mermaid\n" + "\n".join(lines) + "\n```"
+
+    return re.sub(r'```mermaid\s*\n?(.*?)\n?```', _repair_block, markdown_text, flags=re.DOTALL)
+
+
+def get_groq_client() -> Groq:
+    """Returns a Groq API client initialized with the configured Groq API key."""
+    api_key = get_groq_api_key()
+    return Groq(api_key=api_key or "PASTE_YOUR_GROQ_API_KEY_HERE")
+
+
+def _chat_completion(messages: List[Dict[str, str]], json_mode: bool = False) -> str:
+    """Helper to call Groq chat completion synchronously."""
+    client = get_groq_client()
+    kwargs: Dict[str, Any] = {
+        "model": LLM_MODEL,
+        "messages": messages,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    response = client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content or ""
+    return fix_mermaid_syntax(content) if not json_mode else content
+
+
+def _chat_completion_stream(messages: List[Dict[str, str]]):
+    """Helper to stream Groq chat completion tokens."""
+    client = get_groq_client()
+    stream_response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+        stream=True
+    )
+    for chunk in stream_response:
+        if chunk.choices and len(chunk.choices) > 0:
+            delta = chunk.choices[0].delta
+            content_piece = getattr(delta, "content", None) or ""
+            if content_piece:
+                yield content_piece
 
 
 def ask_ai(question: str, context: str = "") -> str:
@@ -35,17 +98,7 @@ Answer this question clearly:
 Use simple language and practical examples where appropriate.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    return response["message"]["content"]
+    return _chat_completion([{"role": "user", "content": prompt}])
 
 
 def generate_quiz(
@@ -102,18 +155,7 @@ Rules:
 - Avoid ambiguous questions.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        format="json"
-    )
-
-    raw = response["message"]["content"]
+    raw = _chat_completion([{"role": "user", "content": prompt}], json_mode=True)
     return json.loads(raw)
 
 
@@ -147,17 +189,7 @@ Explain:
 Keep the explanation educational, structured, and concise.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    return response["message"]["content"]
+    return _chat_completion([{"role": "user", "content": prompt}])
 
 
 def _build_tutor_messages(
@@ -196,7 +228,7 @@ CRITICAL RULES:
         else:
             system_prompt += "Explain concepts clearly, educationally, and comprehensively with structured headings, paragraphs, bullet points, and code blocks where applicable.\n"
 
-        system_prompt += "\nFormatting Guidelines:\n- Use Markdown headings (##, ###), bullet lists, bold text, and numbered steps for readability.\n- When solving problems, present step-by-step reasoning.\n- Never claim you cannot provide study notes or materials; provide rich educational content directly in your response.\n"
+        system_prompt += "\nFormatting Guidelines:\n- Use Markdown headings (##, ###), bullet lists, bold text, and numbered steps for readability.\n- If generating Mermaid diagrams (```mermaid), ALWAYS enclose node labels in double quotes if they contain parentheses, colons, or special characters (e.g., write D[\"Explore (EDA)\"] instead of D[Explore (EDA)]).\n- When solving problems, present step-by-step reasoning.\n- Never claim you cannot provide study notes or materials; provide rich educational content directly in your response.\n"
 
         if context.strip():
             system_prompt += f"""
@@ -209,15 +241,15 @@ Answer the user's questions clearly, prioritizing the study material.
         else:
             system_prompt += "\nAnswer the student's questions clearly, using simple language, clear structure, and examples where appropriate."
 
-    ollama_messages = [{"role": "system", "content": system_prompt}]
+    groq_messages = [{"role": "system", "content": system_prompt}]
 
     for msg in messages:
-        ollama_messages.append({
+        groq_messages.append({
             "role": msg["role"],
             "content": msg["content"]
         })
 
-    return ollama_messages
+    return groq_messages
 
 
 def ask_ai_chat(
@@ -229,14 +261,8 @@ def ask_ai_chat(
     """
     Conversational AI Tutor with strict notes-only mode support (complete response).
     """
-    ollama_messages = _build_tutor_messages(messages, context=context, mode=mode, notes_only=notes_only)
-
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=ollama_messages
-    )
-
-    return response["message"]["content"]
+    groq_messages = _build_tutor_messages(messages, context=context, mode=mode, notes_only=notes_only)
+    return _chat_completion(groq_messages)
 
 
 def ask_ai_chat_stream(
@@ -248,19 +274,8 @@ def ask_ai_chat_stream(
     """
     GPT-style progressive streaming AI Tutor generator that yields text chunks/tokens as they arrive.
     """
-    ollama_messages = _build_tutor_messages(messages, context=context, mode=mode, notes_only=notes_only)
-
-    stream_response = ollama.chat(
-        model=LLM_MODEL,
-        messages=ollama_messages,
-        stream=True
-    )
-
-    for chunk in stream_response:
-        msg = chunk.get("message", {})
-        content_piece = msg.get("content", "")
-        if content_piece:
-            yield content_piece
+    groq_messages = _build_tutor_messages(messages, context=context, mode=mode, notes_only=notes_only)
+    yield from _chat_completion_stream(groq_messages)
 
 
 def generate_quiz_from_material(
@@ -311,18 +326,7 @@ Rules:
 - Make incorrect options realistic and educational.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        format="json"
-    )
-
-    raw = response["message"]["content"]
+    raw = _chat_completion([{"role": "user", "content": prompt}], json_mode=True)
     return json.loads(raw)
 
 
@@ -353,17 +357,7 @@ Summary Format:
 Style: {summary_type} (Clear, structured, easy for students to revise quickly).
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    return response["message"]["content"]
+    return _chat_completion([{"role": "user", "content": prompt}])
 
 
 def generate_flashcards(
@@ -399,18 +393,7 @@ Rules:
 - Grounded directly in the provided material.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        format="json"
-    )
-
-    raw = response["message"]["content"]
+    raw = _chat_completion([{"role": "user", "content": prompt}], json_mode=True)
     data = json.loads(raw)
     return data.get("flashcards", [])
 
@@ -441,26 +424,12 @@ Provide:
 3. **Common Pitfalls & Exam Tips**: Frequent mistakes students make and how to avoid them.
 """
 
-    response = ollama.chat(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    return response["message"]["content"]
+    return _chat_completion([{"role": "user", "content": prompt}])
 
 
 # --------------------------------------------------
 # BACKGROUND ASYNCHRONOUS QUIZ GENERATION WORKER
 # --------------------------------------------------
-
-import threading
-from database import update_quiz_job_status, create_quiz_job
-
 
 def process_quiz_job_background(
     job_id: int,

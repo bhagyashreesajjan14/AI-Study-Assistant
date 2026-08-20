@@ -9,9 +9,26 @@ DB_PATH = DATA_DIR / "database.db"
 VECTOR_DIR = BASE_DIR / "vector_store"
 MODEL_DIR = BASE_DIR / "models"
 
+import os
+
 # Model Configurations
-LLM_MODEL = "llama3:8b"
-EMBEDDING_MODEL = "qwen3-embedding:0.6b"
+LLM_MODEL = "openai/gpt-oss-120b"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def get_groq_api_key() -> str:
+    """Retrieves Groq API key from Streamlit secrets, environment variables, or fallback placeholder."""
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
+            return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("GROQ_API_KEY", "")
+
+
+GROQ_API_KEY = get_groq_api_key()
+
 
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
