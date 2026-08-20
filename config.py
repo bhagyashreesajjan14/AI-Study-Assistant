@@ -17,13 +17,26 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def get_groq_api_key() -> str:
-    """Retrieves Groq API key from Streamlit secrets, environment variables, or fallback placeholder."""
+    """Retrieves Groq API key from Streamlit secrets, environment variables, or secrets.toml."""
     try:
         import streamlit as st
         if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
             return st.secrets["GROQ_API_KEY"]
     except Exception:
         pass
+
+    secrets_file = BASE_DIR / ".streamlit" / "secrets.toml"
+    if secrets_file.exists():
+        try:
+            with open(secrets_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("GROQ_API_KEY"):
+                        parts = line.split("=", 1)
+                        if len(parts) == 2:
+                            return parts[1].strip().strip('"\'')
+        except Exception:
+            pass
+
     return os.environ.get("GROQ_API_KEY", "")
 
 
