@@ -12,7 +12,7 @@ MODEL_DIR = BASE_DIR / "models"
 import os
 
 # Model Configurations
-LLM_MODEL = "openai/gpt-oss-120b"
+LLM_MODEL = "llama3-8b-8192"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
