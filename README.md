@@ -11,14 +11,14 @@
 
 ##  Key Features
 
-- ** PDF Study Material Upload**: Securely upload your coursework and textbooks for analysis.
-- ** Intelligent RAG Q&A**: Ask questions directly about your study material and get precise, context-aware answers.
-- ** Local LLM Support (Ollama)**: Privacy-first processing using local Large Language Models.
-- ** Dynamic Quiz Generation**: Automatically generate quizzes from your notes to test your knowledge.
-- ** Performance Tracking**: Monitor your quiz scores and track your academic progress over time.
-- ** Weak Topic Detection**: Machine learning algorithms analyze your performance to identify areas needing improvement.
-- ** Personalized Recommendations**: Receive tailored study advice and actionable recommendations.
-- ** AI-Generated Study Plans**: Let the AI automatically schedule your study sessions based on your learning goals.
+-  PDF Study Material Upload: Securely upload your coursework and textbooks for analysis.
+-  Intelligent RAG Q&A: Ask questions directly about your study material and get precise, context-aware answers.
+-  Local LLM Support (Ollama): Privacy-first processing using local Large Language Models.
+-  Dynamic Quiz Generation: Automatically generate quizzes from your notes to test your knowledge.
+-  Performance Tracking: Monitor your quiz scores and track your academic progress over time.
+-  Weak Topic Detection: Machine learning algorithms analyze your performance to identify areas needing improvement.
+-  Personalized Recommendations: Receive tailored study advice and actionable recommendations.
+-  AI-Generated Study Plans: Let the AI automatically schedule your study sessions based on your learning goals.
 
 ## 🛠️ Technology Stack
 
@@ -84,10 +84,10 @@ Ensure you have the following installed:
 
 ##  Usage Guide
 
-1. **Upload Documents**: Start by uploading your PDF study materials through the sidebar in the Streamlit app.
-2. **Chat & Ask**: Navigate to the chat interface to ask questions about your documents. The AI will strictly answer based on the provided context.
-3. **Take a Quiz**: Go to the Quiz section to automatically generate multiple-choice questions from your notes.
-4. **View Analytics**: Check the Performance Dashboard to see your historical progress, identified weak topics, and AI-curated study plans.
+1. Upload Documents: Start by uploading your PDF study materials through the sidebar in the Streamlit app.
+2. Chat & Ask: Navigate to the chat interface to ask questions about your documents. The AI will strictly answer based on the provided context.
+3. Take a Quiz: Go to the Quiz section to automatically generate multiple-choice questions from your notes.
+4. View Analytics: Check the Performance Dashboard to see your historical progress, identified weak topics, and AI-curated study plans.
 
 ---
 *Built with ❤️ to make learning smarter.*
