@@ -1,93 +1,162 @@
-# 🎓 AI-Powered Study Assistant
+# AI-Powered Study Assistant
 
-> An intelligent, personalized learning assistant tailored for college students, leveraging modern LLMs and Machine Learning for a smarter study experience.
+> An intelligent, personalized revision and learning platform tailored for college students, combining high-speed cloud LLM inference, local dense semantic retrieval, multimodal OCR, and ML performance diagnostics.
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python)
-![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
-![Ollama](https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge)
-![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.30%2B-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
+![Groq](https://img.shields.io/badge/Groq-LPU_Inference-F05A28?style=for-the-badge)
+![FAISS](https://img.shields.io/badge/FAISS-Vector_Search-00599C?style=for-the-badge)
+![SQLite](https://img.shields.io/badge/SQLite-WAL_Mode-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
 
 ---
 
-##  Key Features
+## Key Features
 
--  PDF Study Material Upload: Securely upload your coursework and textbooks for analysis.
--  Intelligent RAG Q&A: Ask questions directly about your study material and get precise, context-aware answers.
--  Local LLM Support (Ollama): Privacy-first processing using local Large Language Models.
--  Dynamic Quiz Generation: Automatically generate quizzes from your notes to test your knowledge.
--  Performance Tracking: Monitor your quiz scores and track your academic progress over time.
--  Weak Topic Detection: Machine learning algorithms analyze your performance to identify areas needing improvement.
--  Personalized Recommendations: Receive tailored study advice and actionable recommendations.
--  AI-Generated Study Plans: Let the AI automatically schedule your study sessions based on your learning goals.
+- **Multimodal Document Upload & OCR:** Ingests digital and scanned course materials including PDF, DOCX, TXT, MD, PNG, and JPG files using PyMuPDF and RapidOCR.
+- **Citation-Grounded RAG Tutoring:** Performs semantic search over local FAISS vector stores with `sentence-transformers/all-MiniLM-L6-v2` embeddings. Provides token-streamed explanations with exact page-level citations through the Groq API using `openai/gpt-oss-120b`.
+- **Study Material Hub:** Automatically synthesizes comprehensive study summaries, concept explanations, and interactive flashcards.
+- **Dynamic Quiz Engine:** Generates schema-constrained multiple-choice quizzes across customizable difficulty tiers, with automated grading and detailed mistake explanations.
+- **ML Diagnostic Weak Topic Detection:** Tracks historical student performance using a Scikit-Learn Random Forest Classifier to categorize topic mastery as Weak, Average, or Strong.
+- **AI-Generated Study Plans and PDF Export:** Automatically designs personalized revision timetables and exports styled study notes, chat transcripts, and schedules as downloadable PDFs using ReportLab.
+- **Asynchronous Non-Blocking Engine:** Uses background daemon worker threads and an SQLite WAL-mode state machine to keep the interface responsive during document indexing.
 
-## 🛠️ Technology Stack
+---
+
+## Technology Stack
 
 | Category | Technologies |
 | :--- | :--- |
-| **Frontend/UI** | Streamlit, Plotly |
-| **AI/ML Engine** | Ollama, Scikit-learn, Sentence Transformers |
-| **Vector DB / RAG** | FAISS, PyMuPDF |
-| **Database** | SQLite |
-| **Core Language**| Python |
+| **Frontend and UI** | Streamlit (1.30+), Plotly |
+| **LLM Inference** | Groq API (`openai/gpt-oss-120b`) |
+| **Vector Embeddings** | Hugging Face `sentence-transformers/all-MiniLM-L6-v2` using PyTorch CPU |
+| **Vector Database and Indexing** | FAISS (`faiss-cpu`, normalized `IndexFlatIP`) |
+| **Document Parsing and OCR** | PyMuPDF (`fitz`), RapidOCR (`rapidocr-onnxruntime`), python-docx |
+| **Machine Learning Diagnostics** | Scikit-Learn (`RandomForestClassifier`), Pandas, NumPy |
+| **Document Export Engine** | ReportLab |
+| **Persistence and Concurrency** | SQLite3 using Write-Ahead Logging mode |
+| **Core Language** | Python 3.10 / 3.11 |
 
-## 📐 Architecture Overview
+---
+
+## Architecture Overview
 
 ```mermaid
 flowchart TD
-    A[Student] -->|Uploads PDF & Interacts| B(Streamlit UI)
-    B --> C{Core Modules}
-    C -->|Extracts Text| D[RAG Engine]
-    C -->|Generates Tests| E[Quiz Engine]
-    C -->|Logs Scores| F[Performance Tracker]
-    D --> G[Ollama LLM]
-    E --> G
-    F --> H[ML Weak Topic Detection]
-    H --> I[Personalized Recommendations & Study Plans]
-    I --> B
+    A[Student] -->|Uploads Notes and Queries| B(Streamlit UI)
+    B --> C{Core Task Router}
+
+    C -->|Extracts Text and OCR| D[PyMuPDF / RapidOCR Ingestion]
+    D -->|384-d Embeddings| E[FAISS Vector Store: all-MiniLM-L6-v2]
+
+    C -->|Retrieval Context| F[RAG Engine]
+    E --> F
+
+    F -->|Context and Prompt| G[Groq LPU Inference: gpt-oss-120b]
+    G -->|Streamed Tokens and Citations| B
+
+    C -->|Quiz Evaluation and Scores| H[SQLite Database: WAL Mode]
+    H --> I[Scikit-Learn Random Forest Classifier]
+
+    I -->|Topic Mastery Diagnostics| J[Study Planner and Performance Dashboard]
+    J --> B
 ```
 
-##  Getting Started
+---
+
+## Getting Started
 
 ### Prerequisites
 
-Ensure you have the following installed:
-- **Python 3.8+**
-- **[Ollama](https://ollama.ai/)** installed and running locally with your preferred model.
+Before you begin, make sure you have:
+
+- Python 3.10 or 3.11 installed
+- A valid Groq API key from [console.groq.com](https://console.groq.com)
 
 ### Installation
 
-1. **Clone the repository** (if you haven't already):
-   ```bash
-   git clone https://github.com/bhagyashreesajjan14/AI-Study-Assistant.git
-   cd AI-Study-Assistant
-   ```
+#### 1. Clone the repository
 
-2. **Create and activate a virtual environment**:
-   ```bash
-   python -m venv .venv
-   
-   # On Windows:
-   .venv\Scripts\activate
-   # On macOS/Linux:
-   source .venv/bin/activate
-   ```
+```bash
+git clone https://github.com/bhagyashreesajjan14/AI-Study-Assistant.git
+cd AI-Study-Assistant
+```
 
-3. **Install the dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+#### 2. Create and activate a virtual environment
 
-4. **Run the Application**:
-   ```bash
-   streamlit run app.py
-   ```
+```bash
+python -m venv .venv
+```
 
-##  Usage Guide
+**On Windows:**
 
-1. Upload Documents: Start by uploading your PDF study materials through the sidebar in the Streamlit app.
-2. Chat & Ask: Navigate to the chat interface to ask questions about your documents. The AI will strictly answer based on the provided context.
-3. Take a Quiz: Go to the Quiz section to automatically generate multiple-choice questions from your notes.
-4. View Analytics: Check the Performance Dashboard to see your historical progress, identified weak topics, and AI-curated study plans.
+```bash
+.venv\Scripts\activate
+```
+
+**On macOS or Linux:**
+
+```bash
+source .venv/bin/activate
+```
+
+#### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+#### 4. Configure environment variables
+
+Create a `.env` file in the root directory of the project:
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+#### 5. Run the application
+
+```bash
+streamlit run app.py
+```
+
+After starting the application, Streamlit will open the Study Assistant in your browser.
 
 ---
-*Built with ❤️ to make learning smarter.*
+
+## Usage Guide
+
+### Register and Log In
+
+Create an account to receive an isolated vector index and relational database session.
+
+### Upload Documents
+
+Upload course notes, textbooks, or scanned diagrams through the **Study Material** hub. The background worker parses documents, runs OCR when needed, and builds a FAISS vector index.
+
+### Interactive AI Tutor
+
+Ask syllabus-specific questions and receive real-time token-streamed answers grounded in your uploaded documents, including page-level citations.
+
+### Take Adaptive Quizzes
+
+Generate multiple-choice assessments tailored to your uploaded documents or custom topics. Choose a preferred difficulty level and receive grading with detailed explanations for incorrect answers.
+
+### Analyze Weak Spots and Plan Study
+
+Use the **Performance Dashboard** to view mastery classifications:
+
+- Weak
+- Average
+- Strong
+
+Generate personalized revision schedules based on quiz performance and topic-level mastery.
+
+### Export Revision Guides
+
+Download formatted study notes, chat transcripts, and multi-day study timetables as styled PDF files.
+
+---
+
+## License
+
+This project is intended for educational purposes.
