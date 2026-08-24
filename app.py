@@ -505,7 +505,7 @@ if not st.session_state.authenticated:
             login_pass = st.text_input("Password", type="password", key="login_password", placeholder="Enter your password")
 
             st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-            if st.button("Sign In", type="primary", use_container_width=True):
+            if st.button("Sign In", type="primary", width="stretch"):
                 success, message, user_data = authenticate_user(login_user, login_pass)
                 if success:
                     st.session_state.authenticated = True
@@ -524,7 +524,7 @@ if not st.session_state.authenticated:
             reg_sem = st.number_input("Semester", min_value=1, max_value=12, value=1, key="reg_sem")
 
             st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-            if st.button("Create Account", type="primary", use_container_width=True):
+            if st.button("Create Account", type="primary", width="stretch"):
                 success, message, user_data = register_user(reg_user, reg_pass, reg_name, reg_course, reg_sem)
                 if success:
                     st.session_state.authenticated = True
@@ -587,7 +587,7 @@ page = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Logged in as **{user_display}** (`@{current_user.get('username', '')}`)")
-if st.sidebar.button("Sign Out", use_container_width=True):
+if st.sidebar.button("Sign Out", width="stretch"):
     for k in list(st.session_state.keys()):
         del st.session_state[k]
     st.session_state.authenticated = False
@@ -621,7 +621,7 @@ if page == "AI Tutor":
             st.session_state.active_chat_id = new_id
             chats = get_chat_sessions(chat_subject, user_id=user_id)
 
-    if st.sidebar.button("+ New Chat", use_container_width=True, type="primary"):
+    if st.sidebar.button("+ New Chat", width="stretch", type="primary"):
         new_id = create_chat_session(
             chat_subject,
             title=f"New {format_subject(chat_subject) if chat_subject != 'General' else 'General'} Chat",
@@ -640,7 +640,7 @@ if page == "AI Tutor":
         btn_label = f"• {chat['title']}" if is_active else chat["title"]
 
         with col_chat:
-            if st.button(btn_label, key=f"chat_btn_{chat['id']}", use_container_width=True):
+            if st.button(btn_label, key=f"chat_btn_{chat['id']}", width="stretch"):
                 st.session_state.active_chat_id = chat["id"]
                 st.rerun()
 
@@ -699,7 +699,7 @@ if page == "AI Tutor":
                         file_name=derive_pdf_filename(chat_title_str, prefix="Chat"),
                         mime="application/pdf",
                         key=f"dl_full_chat_{active_chat_id}",
-                        use_container_width=True
+                        width="stretch"
                     )
                 except Exception as pdf_err:
                     st.caption(f"PDF export unavailable: {pdf_err}")
@@ -716,18 +716,18 @@ if page == "AI Tutor":
 
             sugg_col1, sugg_col2 = st.columns(2)
             with sugg_col1:
-                if st.button("Explain Normalization with 1NF, 2NF, 3NF examples", use_container_width=True):
+                if st.button("Explain Normalization with 1NF, 2NF, 3NF examples", width="stretch"):
                     st.session_state.pending_prompt = "Explain Database Normalization with 1NF, 2NF, and 3NF examples clearly."
                     st.rerun()
-                if st.button("Compare Processes vs Threads in Operating Systems", use_container_width=True):
+                if st.button("Compare Processes vs Threads in Operating Systems", width="stretch"):
                     st.session_state.pending_prompt = "What is the difference between Processes and Threads in Operating Systems?"
                     st.rerun()
 
             with sugg_col2:
-                if st.button("Break down ACID properties with real-world scenarios", use_container_width=True):
+                if st.button("Break down ACID properties with real-world scenarios", width="stretch"):
                     st.session_state.pending_prompt = "Explain ACID properties in DBMS with real-world scenarios and examples."
                     st.rerun()
-                if st.button("Summarize key concepts from my study material", use_container_width=True):
+                if st.button("Summarize key concepts from my study material", width="stretch"):
                     st.session_state.pending_prompt = "Provide a comprehensive summary of the core concepts in this subject."
                     st.rerun()
 
@@ -757,7 +757,7 @@ if page == "AI Tutor":
                                 file_name=pdf_fname,
                                 mime="application/pdf",
                                 key=f"dl_resp_pdf_{msg.get('id', msg_idx)}",
-                                use_container_width=True
+                                width="stretch"
                             )
                         except Exception:
                             pass
@@ -1026,8 +1026,12 @@ elif page == "Study Material":
                     st.info(f"ℹ️ '{uploaded_file.name}' is already indexed in your library. Re-processing will refresh its index.")
 
                 up_btn_col1, up_btn_col2 = st.columns([0.72, 0.28])
+                force_ocr = False
+                if ext[1:] == "pdf":
+                    force_ocr = st.checkbox("Force OCR on PDF (Check this if your PDF contains handwritten notes on slides)", value=False)
+                
                 with up_btn_col1:
-                    if st.button("🚀 Process & Extract Content (OCR & Indexing)", type="primary", use_container_width=True, key="btn_process_upload"):
+                    if st.button("🚀 Process & Extract Content (OCR & Indexing)", type="primary", width="stretch", key="btn_process_upload"):
                         try:
                             user_notes_dir = get_user_notes_dir(user_id, subject)
                             saved_path = user_notes_dir / uploaded_file.name
@@ -1041,7 +1045,8 @@ elif page == "Study Material":
                                 file_path=str(saved_path),
                                 subject=subject,
                                 file_size=len(file_bytes),
-                                file_type=ext[1:]
+                                file_type=ext[1:],
+                                force_ocr=force_ocr
                             )
 
                             st.session_state.active_document_id = doc_id
@@ -1055,7 +1060,7 @@ elif page == "Study Material":
                             st.error(f"Failed to start processing: {e}")
 
                 with up_btn_col2:
-                    if st.button("🗑️ Discard / Remove", use_container_width=True, key="btn_discard_upload"):
+                    if st.button("🗑️ Discard / Remove", width="stretch", key="btn_discard_upload"):
                         st.session_state.material_uploader_version = uploader_version + 1
                         st.rerun()
 
@@ -1085,7 +1090,7 @@ elif page == "Study Material":
                     with row_c2:
                         st.markdown(status_badge, unsafe_allow_html=True)
                     with row_c3:
-                        if st.button("🗑️ Delete", key=f"btn_del_row_{d_id}", use_container_width=True):
+                        if st.button("🗑️ Delete", key=f"btn_del_row_{d_id}", width="stretch"):
                             st.session_state.pending_delete_doc_id = d_id
                             st.rerun()
 
@@ -1093,7 +1098,7 @@ elif page == "Study Material":
                         st.warning(f"⚠️ **Confirm Deletion**: Are you sure you want to permanently delete '**{d_name}**'?\n\nThis will remove the file, extracted text, AI vector embeddings, and search index.")
                         conf_c1, conf_c2, _ = st.columns([0.25, 0.25, 0.5])
                         with conf_c1:
-                            if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_btn_{d_id}", use_container_width=True):
+                            if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_btn_{d_id}", width="stretch"):
                                 ok, msg = delete_document_data(
                                     user_id=user_id,
                                     document_id=d_id,
@@ -1115,7 +1120,7 @@ elif page == "Study Material":
                                 else:
                                     st.error(msg)
                         with conf_c2:
-                            if st.button("Cancel", key=f"cancel_del_btn_{d_id}", use_container_width=True):
+                            if st.button("Cancel", key=f"cancel_del_btn_{d_id}", width="stretch"):
                                 st.session_state.pending_delete_doc_id = None
                                 st.rerun()
                         st.markdown("<hr style='margin: 8px 0;'>", unsafe_allow_html=True)
@@ -1193,7 +1198,7 @@ elif page == "Study Material":
                 """, unsafe_allow_html=True)
             with banner_col2:
                 st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-                if st.button("🗑️ Delete File", key=f"btn_del_active_hub_{active_doc['id']}", use_container_width=True):
+                if st.button("🗑️ Delete File", key=f"btn_del_active_hub_{active_doc['id']}", width="stretch"):
                     st.session_state.pending_delete_doc_id = active_doc["id"]
                     st.rerun()
 
@@ -1201,7 +1206,7 @@ elif page == "Study Material":
                 st.warning(f"⚠️ **Confirm Deletion**: Are you sure you want to permanently delete active material '**{active_doc['filename']}**'? All extracted text and AI search indexes will be cleared.")
                 c_hub1, c_hub2, _ = st.columns([0.25, 0.25, 0.5])
                 with c_hub1:
-                    if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_hub_{active_doc['id']}", use_container_width=True):
+                    if st.button("🗑️ Confirm Delete", type="primary", key=f"conf_del_hub_{active_doc['id']}", width="stretch"):
                         ok, msg = delete_document_data(
                             user_id=user_id,
                             document_id=active_doc["id"],
@@ -1222,7 +1227,7 @@ elif page == "Study Material":
                         else:
                             st.error(msg)
                 with c_hub2:
-                    if st.button("Cancel", key=f"cancel_del_hub_{active_doc['id']}", use_container_width=True):
+                    if st.button("Cancel", key=f"cancel_del_hub_{active_doc['id']}", width="stretch"):
                         st.session_state.pending_delete_doc_id = None
                         st.rerun()
 
@@ -1232,10 +1237,10 @@ elif page == "Study Material":
                 with p_col1:
                     st.info(f"⏳ Processing in background ({current_progress}%)...")
                 with p_col2:
-                    if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_proc"):
+                    if st.button("🔄 Refresh Status", width="stretch", key="btn_refresh_proc"):
                         st.rerun()
                 with p_col3:
-                    if st.button("⚡ Force Re-Index", use_container_width=True, key="btn_force_reindex"):
+                    if st.button("⚡ Force Re-Index", width="stretch", key="btn_force_reindex"):
                         try:
                             start_background_indexing(
                                 user_id=user_id,
@@ -1295,7 +1300,7 @@ elif page == "Study Material":
                             label_visibility="collapsed"
                         )
                     with qa_col2:
-                        sm_ask_btn = st.button("Ask Question", type="primary", use_container_width=True, key="sm_ask_btn")
+                        sm_ask_btn = st.button("Ask Question", type="primary", width="stretch", key="sm_ask_btn")
 
                     if sm_ask_btn:
                         if not sm_question.strip():
@@ -1400,7 +1405,7 @@ elif page == "Study Material":
                         num_cards = st.slider("Number of Flashcards", min_value=3, max_value=12, value=6, key="fc_slider")
                     with fc_col2:
                         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                        gen_fc_btn = st.button("Generate Flashcards", type="primary", use_container_width=True, key="btn_gen_fc")
+                        gen_fc_btn = st.button("Generate Flashcards", type="primary", width="stretch", key="btn_gen_fc")
 
                     if gen_fc_btn:
                         if not cached_text:
@@ -1431,17 +1436,17 @@ elif page == "Study Material":
 
                         btn_c1, btn_c2, btn_c3 = st.columns([0.33, 0.34, 0.33])
                         with btn_c1:
-                            if st.button("⬅️ Previous Card", use_container_width=True, key="btn_prev_card"):
+                            if st.button("⬅️ Previous Card", width="stretch", key="btn_prev_card"):
                                 st.session_state.active_card_idx = (card_idx - 1) % len(cards)
                                 st.session_state.show_card_back = False
                                 st.rerun()
                         with btn_c2:
                             toggle_lbl = "🙈 Hide Answer" if st.session_state.show_card_back else "👁️ Reveal Answer"
-                            if st.button(toggle_lbl, type="primary", use_container_width=True, key="btn_flip_card"):
+                            if st.button(toggle_lbl, type="primary", width="stretch", key="btn_flip_card"):
                                 st.session_state.show_card_back = not st.session_state.show_card_back
                                 st.rerun()
                         with btn_c3:
-                            if st.button("Next Card ➡️", use_container_width=True, key="btn_next_card"):
+                            if st.button("Next Card ➡️", width="stretch", key="btn_next_card"):
                                 st.session_state.active_card_idx = (card_idx + 1) % len(cards)
                                 st.session_state.show_card_back = False
                                 st.rerun()
@@ -1500,7 +1505,7 @@ elif page == "Study Material":
             note_subj_filter = st.selectbox("Filter by Subject", ["All Subjects"] + available_subjects, format_func=lambda s: "All Subjects" if s == "All Subjects" else format_subject(s), key="note_subj_filter")
         with note_top_col3:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            if st.button("+ New Note", type="primary", use_container_width=True, key="btn_create_new_note"):
+            if st.button("+ New Note", type="primary", width="stretch", key="btn_create_new_note"):
                 new_note_id = create_note(
                     user_id=user_id,
                     title="New Study Note",
@@ -1545,7 +1550,7 @@ elif page == "Study Material":
 
                 btn_s1, btn_s2, btn_s3, btn_s4 = st.columns([0.25, 0.25, 0.25, 0.25])
                 with btn_s1:
-                    if st.button("💾 Save Note", type="primary", use_container_width=True, key=f"btn_save_note_{active_note['id']}"):
+                    if st.button("💾 Save Note", type="primary", width="stretch", key=f"btn_save_note_{active_note['id']}"):
                         update_note(
                             note_id=active_note["id"],
                             user_id=user_id,
@@ -1558,7 +1563,7 @@ elif page == "Study Material":
                         st.rerun()
 
                 with btn_s2:
-                    if st.button("❌ Close Editor", use_container_width=True, key="btn_close_note_ed"):
+                    if st.button("❌ Close Editor", width="stretch", key="btn_close_note_ed"):
                         st.session_state.active_note_id = None
                         st.rerun()
 
@@ -1576,13 +1581,13 @@ elif page == "Study Material":
                             file_name=derive_pdf_filename(edit_title, prefix="Note"),
                             mime="application/pdf",
                             key=f"dl_note_pdf_{active_note['id']}",
-                            use_container_width=True
+                            width="stretch"
                         )
                     except Exception:
                         pass
 
                 with btn_s4:
-                    if st.button("🗑️ Delete Note", use_container_width=True, key=f"btn_del_note_{active_note['id']}"):
+                    if st.button("🗑️ Delete Note", width="stretch", key=f"btn_del_note_{active_note['id']}"):
                         delete_note(active_note["id"], user_id=user_id)
                         st.session_state.active_note_id = None
                         st.success("Note deleted.")
@@ -1617,7 +1622,7 @@ elif page == "Study Material":
 
                 nc_1, nc_2, nc_3 = st.columns([0.33, 0.33, 0.34])
                 with nc_1:
-                    if st.button("✏️ Edit Note", key=f"open_note_{note['id']}", use_container_width=True):
+                    if st.button("✏️ Edit Note", key=f"open_note_{note['id']}", width="stretch"):
                         st.session_state.active_note_id = note["id"]
                         st.rerun()
                 with nc_2:
@@ -1634,12 +1639,12 @@ elif page == "Study Material":
                             file_name=derive_pdf_filename(note["title"], prefix="Note"),
                             mime="application/pdf",
                             key=f"dl_card_pdf_{note['id']}",
-                            use_container_width=True
+                            width="stretch"
                         )
                     except Exception:
                         pass
                 with nc_3:
-                    if st.button("🗑️ Delete", key=f"card_del_note_{note['id']}", use_container_width=True):
+                    if st.button("🗑️ Delete", key=f"card_del_note_{note['id']}", width="stretch"):
                         delete_note(note["id"], user_id=user_id)
                         if st.session_state.active_note_id == note["id"]:
                             st.session_state.active_note_id = None
@@ -1683,10 +1688,10 @@ elif page == "Quiz & Practice":
 
         q_ref1, q_ref2, q_ref3 = st.columns([0.6, 0.2, 0.2])
         with q_ref2:
-            if st.button("🔄 Refresh Status", use_container_width=True, key="btn_ref_q_job"):
+            if st.button("🔄 Refresh Status", width="stretch", key="btn_ref_q_job"):
                 st.rerun()
         with q_ref3:
-            if st.button("❌ Dismiss Job", use_container_width=True, key=f"btn_cancel_q_job_{curr_active_qjob['id']}"):
+            if st.button("❌ Dismiss Job", width="stretch", key=f"btn_cancel_q_job_{curr_active_qjob['id']}"):
                 delete_quiz_job(curr_active_qjob["id"], user_id)
                 st.rerun()
 
@@ -1708,7 +1713,7 @@ elif page == "Quiz & Practice":
         """, unsafe_allow_html=True)
 
         if latest_qjob.get("quiz_data") and latest_qjob["quiz_data"].get("questions"):
-            if st.button("🎯 Start Practicing Generated Quiz", type="primary", use_container_width=True, key=f"btn_start_latest_q_{latest_qjob['id']}"):
+            if st.button("🎯 Start Practicing Generated Quiz", type="primary", width="stretch", key=f"btn_start_latest_q_{latest_qjob['id']}"):
                 st.session_state.quiz = latest_qjob["quiz_data"]["questions"]
                 st.session_state.quiz_subject = latest_qjob["subject"]
                 st.session_state.quiz_topic = latest_qjob["topic"]
@@ -1765,7 +1770,7 @@ elif page == "Quiz & Practice":
                 target_level = st.selectbox("Target Level", ["Beginner", "Intermediate", "Advanced"], index=1, key="quiz_mat_target_level")
                 number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_mat_num_slider")
 
-            if st.button("Start Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_mat"):
+            if st.button("Start Quiz Generation", type="primary", width="stretch", key="btn_start_bg_quiz_mat"):
                 doc_text = chosen_doc.get("extracted_text", "")
                 if not doc_text and Path(chosen_doc["file_path"]).exists():
                     doc_text = get_full_document_text(chosen_doc["file_path"])
@@ -1800,7 +1805,7 @@ elif page == "Quiz & Practice":
             target_level = st.selectbox("Target Level", ["Beginner", "Intermediate", "Advanced"], index=1, key="quiz_target_level")
             number = st.slider("Number of Questions", min_value=5, max_value=15, value=5, key="quiz_num_slider")
 
-        if st.button("🚀 Start Background Quiz Generation", type="primary", use_container_width=True, key="btn_start_bg_quiz_top"):
+        if st.button("🚀 Start Background Quiz Generation", type="primary", width="stretch", key="btn_start_bg_quiz_top"):
             if not topic.strip():
                 st.warning("⚠️ Please enter a study topic.")
             else:
@@ -1851,7 +1856,7 @@ elif page == "Quiz & Practice":
                         form_answers[i] = question["options"].index(selected)
                     st.markdown("<br>", unsafe_allow_html=True)
 
-                submit_btn = st.form_submit_button("Submit Quiz", type="primary", use_container_width=True)
+                submit_btn = st.form_submit_button("Submit Quiz", type="primary", width="stretch")
 
                 if submit_btn:
                     st.session_state.quiz_answers = form_answers
@@ -1961,7 +1966,7 @@ elif page == "Performance & Analytics":
     if df.empty:
         st.info("No quiz attempts recorded yet. Complete quizzes to generate performance analytics.")
     else:
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("""
@@ -2155,7 +2160,7 @@ elif page == "Recommendations & Study Plan":
                     file_name=f"Study_Plan_{plan_data['topic'].replace(' ', '_')}.pdf",
                     mime="application/pdf",
                     type="primary",
-                    use_container_width=True
+                    width="stretch"
                 )
 
         st.markdown("""

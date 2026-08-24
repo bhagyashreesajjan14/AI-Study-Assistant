@@ -28,6 +28,7 @@ coverage.xml
 
 # Local database & transient user data
 data/database.db
+ai_study_assistant.db
 data/notes/user_*
 vector_store/user_*
 vector_store/*.index

@@ -244,19 +244,20 @@ def extract_plain_text(file_path: str) -> str:
             return ""
 
 
-def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
+def extract_pdf_pages(pdf_path: str, force_ocr: bool = False, progress_callback: Optional[Any] = None) -> List[Dict[str, Any]]:
     """Extracts text and page numbers from a PDF using PyMuPDF and RapidOCR for scanned pages."""
     if fitz is None:
         return []
     document = fitz.open(str(pdf_path))
     pages = []
     source_name = Path(pdf_path).name
+    total_pages = document.page_count
 
     for page_number, page in enumerate(document, start=1):
         text = page.get_text().strip()
 
-        # If page has no selectable text (scanned PDF), run OCR on rendered page pixmap
-        if len(text) < 15 and _ocr_engine is not None:
+        # If page has no selectable text (scanned PDF) or force_ocr is True, run OCR on rendered page pixmap
+        if (len(text) < 15 or force_ocr) and _ocr_engine is not None:
             try:
                 pix = page.get_pixmap(dpi=150)
                 img_bytes = pix.tobytes("png")
@@ -264,7 +265,9 @@ def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
                 if result:
                     lines = [line[1] for line in result if line and len(line) > 1 and line[1]]
                     ocr_text = "\n".join(lines).strip()
-                    if len(ocr_text) > len(text):
+                    if force_ocr:
+                        text = text + "\n" + ocr_text
+                    elif len(ocr_text) > len(text):
                         text = ocr_text
             except Exception:
                 pass
@@ -275,21 +278,27 @@ def extract_pdf_pages(pdf_path: str) -> List[Dict[str, Any]]:
                 "page": page_number,
                 "source": source_name
             })
+            
+        if progress_callback:
+            try:
+                progress_callback(page_number, total_pages)
+            except Exception:
+                pass
 
     document.close()
     return pages
 
 
-def extract_document_pages(file_path: str) -> List[Dict[str, Any]]:
+def extract_document_pages(file_path: str, force_ocr: bool = False, progress_callback: Optional[Any] = None) -> List[Dict[str, Any]]:
     """
-    Extracts structured pages/sections with text from PDF, Image, Word DOC/DOCX, TXT, or MD files.
+    Routes the file to the appropriate extractor based on its extension.
     """
     path = Path(file_path)
     ext = path.suffix.lower()
     source_name = path.name
 
     if ext == ".pdf":
-        return extract_pdf_pages(file_path)
+        return extract_pdf_pages(file_path, force_ocr=force_ocr, progress_callback=progress_callback)
     elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"):
         text = extract_image_text(file_path)
         if text:
@@ -771,7 +780,8 @@ def process_document_background(
     document_id: int,
     file_path: str,
     filename: str,
-    subject: str
+    subject: str,
+    force_ocr: bool = False
 ):
     """
     Background worker executed in a separate daemon thread.
@@ -782,8 +792,12 @@ def process_document_background(
         # Step 1: Mark processing started (10%)
         update_job_status(job_id, status="processing", progress=10)
 
-        # Step 2: Extract text from file (35%)
-        pages = extract_document_pages(file_path)
+        # Step 2: Extract text from file (10% -> 35%)
+        def on_extract_progress(current_page, total_pages):
+            pct = 10 + int((current_page / max(1, total_pages)) * 25)
+            update_job_status(job_id, status="processing", progress=min(35, pct))
+            
+        pages = extract_document_pages(file_path, force_ocr=force_ocr, progress_callback=on_extract_progress)
         if not pages:
             ext = Path(filename).suffix.lower()
             if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"):
@@ -864,7 +878,8 @@ def start_background_indexing(
     file_path: str,
     subject: str,
     file_size: int = 0,
-    file_type: str = "pdf"
+    file_type: str = "pdf",
+    force_ocr: bool = False
 ) -> Tuple[int, int]:
     """
     Creates persistent job & document records and spawns a background thread.
@@ -881,10 +896,10 @@ def start_background_indexing(
 
     worker_thread = threading.Thread(
         target=process_document_background,
-        args=(job_id, user_id, doc_id, str(file_path), filename, subject),
+        args=(job_id, user_id, doc_id, str(file_path), filename, subject, force_ocr),
         daemon=True,
         name=f"DocWorker-Job-{job_id}"
     )
     worker_thread.start()
 
-    return doc_id, job_id
+    return doc_id, job_id
